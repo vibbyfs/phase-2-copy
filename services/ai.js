@@ -384,7 +384,7 @@ CONTOH:
       return `✅ Siap, ${name}! Pengingat ${context.title} sudah dijadwalkan. Aku akan ingetin kamu tepat waktu! 😊`;
     } else {
       const name = context.userName || 'kamu';
-      return `⏰ ${name}, waktunya ${context.title}! Jangan lupa ya 😊`;
+      return `⏰ ${name}, waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
     }
   }
 }
@@ -426,6 +426,19 @@ function getMotivationalMessage(title) {
       'Good luck untuk pertemuan ini! 🤝😊'
     ];
     return workMessages[Math.floor(Math.random() * workMessages.length)];
+  }
+  
+  // Work departure/home related
+  if (lowerTitle.includes('pulang') || lowerTitle.includes('pergi') || lowerTitle.includes('berangkat')) {
+    const departureMessages = [
+      'Jangan lupa barang-barangmu ya! 👜😊',
+      'Hati-hati di jalan! 🚗💙',
+      'Safe trip! Semoga lancar perjalanannya! 🛣️✨',
+      'Waktunya berangkat, jangan sampai ketinggalan! ⏰🚶‍♀️',
+      'Ayo berangkat sebelum macet! 🚗😄',
+      'Time to go! Sampai jumpa di rumah! 🏠💕'
+    ];
+    return departureMessages[Math.floor(Math.random() * departureMessages.length)];
   }
   
   // Food/meal related

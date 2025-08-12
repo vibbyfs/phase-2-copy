@@ -24,8 +24,17 @@ async function scheduleReminder(reminder) {
         const recipient = reminder.RecipientId ? await User.findByPk(reminder.RecipientId) : owner;
         const to = recipient.phone;
 
-        // Gunakan formattedMessage jika ada, jika tidak gunakan format default
-        const message = reminder.formattedMessage || `⏰ Pengingat: ${reminder.title}`;
+        // Generate personal reminder message
+        let message = reminder.formattedMessage;
+        if (!message) {
+          // Import generateReply function untuk membuat pesan yang personal
+          const { generateReply } = require('./ai');
+          message = await generateReply('reminder', {
+            title: reminder.title,
+            userName: recipient.name || recipient.username || 'kamu'
+          });
+        }
+        
         await sendReminder(to, message, reminder.id);
 
         // Handle repeat patterns - disederhanakan hanya hourly, daily, weekly, monthly
