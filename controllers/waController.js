@@ -289,9 +289,12 @@ module.exports = {
             for (const recipient of recipients) {
                 let formattedMessage = ai.formattedMessage;
                 if (!formattedMessage) {
-                    const recipientName = recipient.name || recipient.username || 'Kamu';
-                    const timeStr = DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm');
-                    formattedMessage = `Hay ${recipientName} 👋, waktunya untuk *${title}* pada jam ${timeStr} WIB! Jangan lupa ya 😊`;
+                    // Generate personal reminder message using AI
+                    formattedMessage = await generateReply('reminder', {
+                        title,
+                        userName: recipient.name || recipient.username || 'kamu',
+                        timeOfDay: DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm')
+                    });
                 }
 
                 const reminder = await Reminder.create({
@@ -369,9 +372,12 @@ module.exports = {
             const confirmMsg = await generateReply('confirm', {
                 title,
                 recipients: recipientNames,
+                userName: user.name || user.username || null,
                 timeDescription,
                 repeatText,
                 timeType,
+                relativeTime: timeType === 'relative' ? timeDescription : null,
+                dueTime: timeType !== 'relative' ? timeDescription : null,
                 count: createdReminders.length
             });
 

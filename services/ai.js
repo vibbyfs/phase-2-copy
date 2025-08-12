@@ -312,76 +312,154 @@ function extractTitleFromText(text) {
 }
 
 /**
- * Generate AI reply untuk konfirmasi atau reminder dengan konteks yang lebih kaya
+ * Generate AI reply untuk konfirmasi atau reminder
  */
 async function generateReply(type, context = {}) {
-  let systemMsg;
-  
-  if (type === 'confirm') {
-    systemMsg = `
-Kamu asisten WhatsApp yang ramah dan informatif. Buat konfirmasi pembuatan reminder yang natural dalam bahasa Indonesia.
+  const systemMsg = type === 'confirm' 
+    ? `Kamu asisten WhatsApp yang ramah dan personal seperti teman dekat. Buat konfirmasi pembuatan reminder yang hangat dan natural dalam bahasa Indonesia. 
 
-Context yang tersedia:
-- title: ${context.title}
-- recipients: ${context.recipients}
-- timeDescription: ${context.timeDescription}
-- repeatText: ${context.repeatText}
-- timeType: ${context.timeType}
+GAYA BAHASA:
+- Gunakan kata "kamu" atau nama user jika ada
+- Santai dan ramah seperti asisten pribadi
+- Tambahkan kalimat motivasional yang relevan dengan konteks
+- Gunakan emoji yang sesuai
 
-Format response berdasarkan timeType:
-- relative: "✅ Siap! Reminder *[title]* untuk [recipients] akan dikirim [timeDescription][repeatText]. [motivational message]"
-- absolute: "✅ Terjadwal! Reminder *[title]* untuk [recipients] pada [timeDescription][repeatText]. [motivational message]"  
-- recurring: "✅ Aktif! Reminder *[title]* untuk [recipients] [timeDescription][repeatText]. [motivational message]"
+STRUKTUR:
+✅ [Konfirmasi siap] [nama/kamu]! [Detail reminder] [kalimat motivasional/hangat] [emoji]
 
-Tambahkan emoji yang relevan dan pesan motivasi yang sesuai dengan aktivitas.
-`;
-  } else {
-    systemMsg = `
-Kamu asisten WhatsApp yang ramah dan motivasional. Buat pesan reminder yang natural dalam bahasa Indonesia.
+CONTOH:
+- ✅ Siap, Vinny! Aku akan ingetin kamu buat beli Kopi Fore 1 menit lagi. Jangan lupa nikmati aromanya yang bikin mood naik! ☕✨
+- ✅ Oke kamu! Pengingat olahraga sudah dijadwalkan setiap hari jam 7 pagi. Semangat jaga kesehatan! 💪🌅`
+    : `Kamu asisten WhatsApp yang ramah dan komunikatif seperti teman yang mengingatkan dengan hangat. Buat pesan reminder yang natural dan tidak formal dalam bahasa Indonesia.
 
-Context: ${JSON.stringify(context)}
+GAYA BAHASA:
+- Gunakan kata "kamu" atau nama user
+- Natural dan komunikatif seperti teman dekat
+- Bisa sedikit humor atau dorongan positif
+- Tidak terlalu formal
 
-Format: "Hay [username] 👋, waktunya untuk *[title]*! [motivational message] 😊"
+STRUKTUR:
+⏰ [Sapaan + nama/kamu], [pesan pengingat natural] [motivasi/humor ringan] [emoji]
 
-Sesuaikan pesan motivasi dengan jenis aktivitas.
-`;
-  }
+CONTOH:
+- ⏰ Hei Vinny, waktunya beli Kopi Fore nih! Jangan sampai kehabisan ya—kopi enak nggak nungguin 😄☕
+- ⏰ Vinny, waktunya ngopi! Kopi Fore udah nunggu, biar harimu makin mantap! ☕✨
+- ⏰ Kamu, jangan lupa olahraganya! Tubuh sehat, pikiran fresh! 💪😊`;
 
   try {
     const completion = await openai.chat.completions.create({
       model: 'gpt-3.5-turbo',
       messages: [
         { role: 'system', content: systemMsg },
-        { role: 'user', content: `Buatkan pesan ${type} dengan context: ${JSON.stringify(context)}` }
+        { role: 'user', content: JSON.stringify(context) }
       ],
-      temperature: 0.7,
+      temperature: 0.8,
       max_tokens: 150
     });
 
-    const response = completion.choices[0]?.message?.content?.trim();
+    const aiResponse = completion.choices[0]?.message?.content?.trim();
     
-    if (response) {
-      return response;
+    if (aiResponse && aiResponse.length > 10) {
+      return aiResponse;
     }
     
-    // Fallback responses
+    // Fallback dengan template yang lebih personal
     if (type === 'confirm') {
-      const { title, recipients, timeDescription, repeatText } = context;
-      return `✅ Siap! Reminder *${title}* untuk ${recipients} sudah dijadwalkan ${timeDescription}${repeatText}. Jangan sampai terlewat ya! 😊`;
+      const name = context.userName || context.recipients || 'kamu';
+      const timeInfo = context.timeType === 'relative' 
+        ? `${context.relativeTime}` 
+        : `pada ${context.dueTime}`;
+      
+      return `✅ Siap, ${name}! Aku akan ingetin kamu buat ${context.title} ${timeInfo}. ${getMotivationalMessage(context.title)}`;
     } else {
-      return '⏰ Waktunya reminder!';
+      const name = context.userName || 'kamu';
+      return `⏰ Hei ${name}, waktunya ${context.title} nih! ${getMotivationalMessage(context.title)}`;
     }
   } catch (error) {
     console.error('[AI] Generate reply error:', error);
     
     // Enhanced fallback
     if (type === 'confirm') {
-      const { title, recipients, timeDescription } = context;
-      return `✅ Reminder *${title}* untuk ${recipients} berhasil dijadwalkan ${timeDescription || ''}! 👍`;
+      const name = context.userName || context.recipients || 'kamu';
+      return `✅ Siap, ${name}! Pengingat ${context.title} sudah dijadwalkan. Aku akan ingetin kamu tepat waktu! 😊`;
     } else {
-      return '⏰ Waktunya reminder! 😊';
+      const name = context.userName || 'kamu';
+      return `⏰ ${name}, waktunya ${context.title}! Jangan lupa ya 😊`;
     }
   }
+}
+
+/**
+ * Generate motivational message based on activity context
+ */
+function getMotivationalMessage(title) {
+  const lowerTitle = title.toLowerCase();
+  
+  // Coffee/drink related
+  if (lowerTitle.includes('kopi') || lowerTitle.includes('coffee')) {
+    const coffeeMessages = [
+      'Jangan lupa nikmati aromanya yang bikin mood naik! ☕✨',
+      'Kopi enak nggak nungguin, buruan! ☕😄',
+      'Biar harimu makin mantap dengan secangkir kopi! ☕🌟',
+      'Saatnya boost energi dengan kopi favorit! ☕⚡'
+    ];
+    return coffeeMessages[Math.floor(Math.random() * coffeeMessages.length)];
+  }
+  
+  // Exercise/workout related
+  if (lowerTitle.includes('olahraga') || lowerTitle.includes('gym') || lowerTitle.includes('workout') || lowerTitle.includes('lari')) {
+    const exerciseMessages = [
+      'Semangat jaga kesehatan! 💪🌅',
+      'Tubuh sehat, pikiran fresh! 💪😊',
+      'Let\'s go, jangan sampai skip! 💪🔥',
+      'Sehat itu investasi terbaik! 💪✨'
+    ];
+    return exerciseMessages[Math.floor(Math.random() * exerciseMessages.length)];
+  }
+  
+  // Meeting/work related
+  if (lowerTitle.includes('meeting') || lowerTitle.includes('rapat') || lowerTitle.includes('kerja')) {
+    const workMessages = [
+      'Jangan sampai telat ya! 📅⏰',
+      'Sukses untuk meetingnya! 📋✨',
+      'Siap-siap perform yang terbaik! 💼🌟',
+      'Good luck untuk pertemuan ini! 🤝😊'
+    ];
+    return workMessages[Math.floor(Math.random() * workMessages.length)];
+  }
+  
+  // Food/meal related
+  if (lowerTitle.includes('makan') || lowerTitle.includes('sarapan') || lowerTitle.includes('minum') || lowerTitle.includes('beli')) {
+    const foodMessages = [
+      'Jangan sampai lupa ya, tubuh butuh nutrisi! 🍽️😊',
+      'Saatnya isi perut biar energi tetap full! 🍽️⚡',
+      'Makan yang sehat ya! 🥗✨',
+      'Jangan skip meal, kesehatan nomor satu! 🍽️�'
+    ];
+    return foodMessages[Math.floor(Math.random() * foodMessages.length)];
+  }
+  
+  // Rest/break related
+  if (lowerTitle.includes('istirahat') || lowerTitle.includes('tidur') || lowerTitle.includes('break')) {
+    const restMessages = [
+      'Tubuh butuh istirahat yang cukup! 😴💤',
+      'Recharge energy, besok semangat lagi! 🔋😊',
+      'Self-care itu penting! 💆‍♀️✨',
+      'Rest well, tomorrow is a new day! 🌙💫'
+    ];
+    return restMessages[Math.floor(Math.random() * restMessages.length)];
+  }
+  
+  // Default motivational messages
+  const defaultMessages = [
+    'Semangat menjalani hari! 🌟😊',
+    'Kamu pasti bisa! 💪✨',
+    'Jangan lupa ya! 😊🎯',
+    'Keep going, you got this! 🚀💫',
+    'Ayo kita lakukan dengan semangat! 🔥😄'
+  ];
+  
+  return defaultMessages[Math.floor(Math.random() * defaultMessages.length)];
 }
 
 module.exports = { extract, generateReply, extractTitleFromText };
