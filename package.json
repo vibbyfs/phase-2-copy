@@ -21,6 +21,7 @@
     "openai": "^5.12.2",
     "pg": "^8.16.3",
     "sequelize": "^6.37.7",
+    "twilio": "^5.8.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

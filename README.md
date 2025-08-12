@@ -62,12 +62,29 @@ npx sequelize-cli db:seed:all
 
 3. Set environment variables:
 ```env
-OPENAI_API_KEY=your_openai_key
+# Database & Auth
 DATABASE_URL=your_database_url
 JWT_SECRET=your_jwt_secret
+
+# OpenAI for AI processing
+OPENAI_API_KEY=your_openai_key
+
+# Twilio WhatsApp API
+TWILIO_ACCOUNT_SID=your_twilio_account_sid
+TWILIO_AUTH_TOKEN=your_twilio_auth_token
+TWILIO_WHATSAPP_FROM=whatsapp:+14155238886
+
+# Timezone
+WIB_TZ=Asia/Jakarta
 ```
 
-4. Run the application:
+4. Configure Twilio Webhook:
+   - Login to Twilio Console
+   - Go to WhatsApp Sandbox settings
+   - Set webhook URL to: `https://your-domain.com/api/wa/inbound`
+   - Method: POST
+
+5. Run the application:
 ```bash
 npm start
 ```
