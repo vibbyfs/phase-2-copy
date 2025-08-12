@@ -343,13 +343,15 @@ Jika untuk diri sendiri:
 ⏰ [Sapaan + nama/kamu], [pesan pengingat natural] [motivasi/humor ringan] [emoji]
 
 Jika untuk teman (ada context.isForFriend = true):
-⏰ Hei [nama]! Ada reminder dari ${context.senderName || context.senderUsername || 'temanmu'}: [pesan pengingat] [motivasi/humor ringan] [emoji]
+⏰ Hei [nama]! Ada reminder dari ${context.senderName || context.senderUsername || 'temanmu'}: [title]! [motivasi/humor ringan] [emoji]
 
 CONTOH:
 - ⏰ Hei Vinny, waktunya beli Kopi Fore nih! Jangan sampai kehabisan ya—kopi enak nggak nungguin 😄☕
-- ⏰ Hei Dimas! Ada reminder dari Vinny: waktunya tidur siang! Istirahat yang cukup ya, biar segar lagi nanti 😴💤
-- ⏰ Hei Budi! Ada reminder dari Alex: waktunya meeting! Siap-siap perform yang terbaik! 💼🌟
-- ⏰ Kamu, jangan lupa olahraganya! Tubuh sehat, pikiran fresh! 💪😊`;
+- ⏰ Hei Dimas! Ada reminder dari Vinny: waktunya Tidur Siang! Istirahat yang cukup ya, biar segar lagi nanti 😴💤
+- ⏰ Hei Budi! Ada reminder dari Alex: waktunya Meeting! Siap-siap perform yang terbaik! 💼🌟
+- ⏰ Kamu, jangan lupa olahraganya! Tubuh sehat, pikiran fresh! 💪😊
+
+PENTING: Untuk reminder ke teman, SELALU sertakan "Ada reminder dari [senderName]:" di awal pesan!`;
 
   try {
     const completion = await openai.chat.completions.create({
@@ -400,7 +402,7 @@ CONTOH:
       // Enhanced fallback untuk reminder ke teman - SELALU sertakan pengirim
       if (context.isForFriend) {
         const senderName = context.senderName || context.senderUsername || 'temanmu';
-        return `⏰ ${name}, ada reminder dari ${senderName}: waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
+        return `⏰ Hei ${name}! Ada reminder dari ${senderName}: waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
       } else {
         return `⏰ ${name}, waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
       }

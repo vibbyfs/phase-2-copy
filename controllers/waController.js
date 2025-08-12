@@ -287,23 +287,31 @@ module.exports = {
 
             // Buat reminder untuk setiap recipient
             for (const recipient of recipients) {
-                let formattedMessage = ai.formattedMessage;
-                if (!formattedMessage) {
-                    // Generate personal reminder message using AI
-                    const isForFriend = recipient.id !== user.id;
+                const isForFriend = recipient.id !== user.id;
+                let formattedMessage;
+                
+                // Untuk reminder ke teman, selalu generate ulang dengan informasi pengirim
+                if (isForFriend) {
                     const context = {
                         title,
                         userName: recipient.name || recipient.username || 'kamu',
-                        timeOfDay: DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm')
+                        timeOfDay: DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm'),
+                        senderName: user.name || user.username || 'Teman',
+                        isForFriend: true
                     };
-                    
-                    // Tambahkan informasi pengirim jika reminder untuk teman
-                    if (isForFriend) {
-                        context.senderName = user.name || user.username || 'Teman';
-                        context.isForFriend = true;
-                    }
-                    
                     formattedMessage = await generateReply('reminder', context);
+                } else {
+                    // Untuk reminder diri sendiri, gunakan AI message atau generate baru
+                    formattedMessage = ai.formattedMessage;
+                    if (!formattedMessage) {
+                        const context = {
+                            title,
+                            userName: recipient.name || recipient.username || 'kamu',
+                            timeOfDay: DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('HH:mm'),
+                            isForFriend: false
+                        };
+                        formattedMessage = await generateReply('reminder', context);
+                    }
                 }
 
                 const reminder = await Reminder.create({
