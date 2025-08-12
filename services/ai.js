@@ -127,7 +127,7 @@ Analisis pesan dengan teliti dan berikan JSON yang valid. Pastikan dueAtWIB sela
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-4',
       messages: [
         { role: 'system', content: systemMsg },
         { role: 'user', content: `Pesan: "${message}"` }
@@ -352,7 +352,7 @@ CONTOH:
 
   try {
     const completion = await openai.chat.completions.create({
-      model: 'gpt-3.5-turbo',
+      model: 'gpt-4',
       messages: [
         { role: 'system', content: systemMsg },
         { role: 'user', content: JSON.stringify(context) }
