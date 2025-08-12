@@ -343,11 +343,12 @@ Jika untuk diri sendiri:
 ⏰ [Sapaan + nama/kamu], [pesan pengingat natural] [motivasi/humor ringan] [emoji]
 
 Jika untuk teman (ada context.isForFriend = true):
-⏰ Hei [nama]! Ada reminder dari ${context.senderName || 'temanmu'}: [pesan pengingat] [motivasi/humor ringan] [emoji]
+⏰ Hei [nama]! Ada reminder dari ${context.senderName || context.senderUsername || 'temanmu'}: [pesan pengingat] [motivasi/humor ringan] [emoji]
 
 CONTOH:
 - ⏰ Hei Vinny, waktunya beli Kopi Fore nih! Jangan sampai kehabisan ya—kopi enak nggak nungguin 😄☕
 - ⏰ Hei Dimas! Ada reminder dari Vinny: waktunya tidur siang! Istirahat yang cukup ya, biar segar lagi nanti 😴💤
+- ⏰ Hei Budi! Ada reminder dari Alex: waktunya meeting! Siap-siap perform yang terbaik! 💼🌟
 - ⏰ Kamu, jangan lupa olahraganya! Tubuh sehat, pikiran fresh! 💪😊`;
 
   try {
@@ -378,9 +379,10 @@ CONTOH:
     } else {
       const name = context.userName || 'kamu';
       
-      // Jika reminder untuk teman, sertakan identitas pengirim
-      if (context.isForFriend && context.senderName) {
-        return `⏰ Hei ${name}! Ada reminder dari ${context.senderName}: waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
+      // Jika reminder untuk teman, SELALU sertakan identitas pengirim
+      if (context.isForFriend) {
+        const senderName = context.senderName || context.senderUsername || 'temanmu';
+        return `⏰ Hei ${name}! Ada reminder dari ${senderName}: waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
       } else {
         return `⏰ Hei ${name}, waktunya ${context.title} nih! ${getMotivationalMessage(context.title)}`;
       }
@@ -395,9 +397,10 @@ CONTOH:
     } else {
       const name = context.userName || 'kamu';
       
-      // Enhanced fallback untuk reminder ke teman
-      if (context.isForFriend && context.senderName) {
-        return `⏰ ${name}, ada reminder dari ${context.senderName}: waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
+      // Enhanced fallback untuk reminder ke teman - SELALU sertakan pengirim
+      if (context.isForFriend) {
+        const senderName = context.senderName || context.senderUsername || 'temanmu';
+        return `⏰ ${name}, ada reminder dari ${senderName}: waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
       } else {
         return `⏰ ${name}, waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
       }
