@@ -339,11 +339,15 @@ GAYA BAHASA:
 - Tidak terlalu formal
 
 STRUKTUR:
+Jika untuk diri sendiri:
 ⏰ [Sapaan + nama/kamu], [pesan pengingat natural] [motivasi/humor ringan] [emoji]
+
+Jika untuk teman (ada context.isForFriend = true):
+⏰ Hei [nama]! Ada reminder dari ${context.senderName || 'temanmu'}: [pesan pengingat] [motivasi/humor ringan] [emoji]
 
 CONTOH:
 - ⏰ Hei Vinny, waktunya beli Kopi Fore nih! Jangan sampai kehabisan ya—kopi enak nggak nungguin 😄☕
-- ⏰ Vinny, waktunya ngopi! Kopi Fore udah nunggu, biar harimu makin mantap! ☕✨
+- ⏰ Hei Dimas! Ada reminder dari Vinny: waktunya tidur siang! Istirahat yang cukup ya, biar segar lagi nanti 😴💤
 - ⏰ Kamu, jangan lupa olahraganya! Tubuh sehat, pikiran fresh! 💪😊`;
 
   try {
@@ -373,7 +377,13 @@ CONTOH:
       return `✅ Siap, ${name}! Aku akan ingetin kamu buat ${context.title} ${timeInfo}. ${getMotivationalMessage(context.title)}`;
     } else {
       const name = context.userName || 'kamu';
-      return `⏰ Hei ${name}, waktunya ${context.title} nih! ${getMotivationalMessage(context.title)}`;
+      
+      // Jika reminder untuk teman, sertakan identitas pengirim
+      if (context.isForFriend && context.senderName) {
+        return `⏰ Hei ${name}! Ada reminder dari ${context.senderName}: waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
+      } else {
+        return `⏰ Hei ${name}, waktunya ${context.title} nih! ${getMotivationalMessage(context.title)}`;
+      }
     }
   } catch (error) {
     console.error('[AI] Generate reply error:', error);
@@ -384,7 +394,13 @@ CONTOH:
       return `✅ Siap, ${name}! Pengingat ${context.title} sudah dijadwalkan. Aku akan ingetin kamu tepat waktu! 😊`;
     } else {
       const name = context.userName || 'kamu';
-      return `⏰ ${name}, waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
+      
+      // Enhanced fallback untuk reminder ke teman
+      if (context.isForFriend && context.senderName) {
+        return `⏰ ${name}, ada reminder dari ${context.senderName}: waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
+      } else {
+        return `⏰ ${name}, waktunya ${context.title}! ${getMotivationalMessage(context.title)}`;
+      }
     }
   }
 }

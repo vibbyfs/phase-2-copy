@@ -36,10 +36,23 @@ async function scheduleReminder(reminder) {
         if (!message) {
           // Import generateReply function untuk membuat pesan yang personal
           const { generateReply } = require('./ai');
-          message = await generateReply('reminder', {
+          
+          // Get sender info untuk reminder ke teman
+          const sender = await User.findByPk(reminder.UserId);
+          const isForFriend = reminder.RecipientId !== null;
+          
+          const context = {
             title: reminder.title,
             userName: recipient.name || recipient.username || 'kamu'
-          });
+          };
+          
+          // Tambahkan info pengirim jika reminder untuk teman
+          if (isForFriend && sender) {
+            context.senderName = sender.name || sender.username || 'Teman';
+            context.isForFriend = true;
+          }
+          
+          message = await generateReply('reminder', context);
         }
         
         await sendReminder(to, message, reminder.id);
