@@ -9,14 +9,20 @@ const WIB_TZ = 'Asia/Jakarta';
 /**
  * Helper function to send response in appropriate format
  */
-function sendResponse(res, message, isTwilioWebhook = false) {
+async function sendResponse(res, message, isTwilioWebhook = false, userPhone = null) {
     if (isTwilioWebhook) {
-        return res.type('text/xml').send(`
-            <?xml version="1.0" encoding="UTF-8"?>
-            <Response>
-                <Message>${message}</Message>
-            </Response>
-        `);
+        // For Twilio webhook, actively send the message via waOutbound
+        if (userPhone) {
+            const { sendReminder } = require('../services/waOutbound');
+            try {
+                await sendReminder(userPhone, message, null);
+                console.log('[WA] Response sent to:', userPhone);
+            } catch (error) {
+                console.error('[WA] Failed to send response:', error);
+            }
+        }
+        // Return empty TwiML response since we've already sent the message
+        return res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
     } else {
         return res.json({
             action: 'reply',
@@ -59,7 +65,7 @@ module.exports = {
             // Cari user berdasarkan phone
             const user = await User.findOne({ where: { phone: from } });
             if (!user) {
-                return sendResponse(res, 'Nomormu belum terdaftar di sistem. Silakan daftar dulu ya 😊', isTwilioWebhook);
+                return await sendResponse(res, 'Nomormu belum terdaftar di sistem. Silakan daftar dulu ya 😊', isTwilioWebhook, from);
             }
 
             // Extract pesan menggunakan AI
@@ -79,7 +85,7 @@ module.exports = {
                 });
 
                 if (activeReminders.length === 0) {
-                    return sendResponse(res, 'Tidak ada reminder berulang yang aktif untuk dibatalkan 😊', isTwilioWebhook);
+                    return await sendResponse(res, 'Tidak ada reminder berulang yang aktif untuk dibatalkan 😊', isTwilioWebhook, from);
                 }
 
                 for (const rem of activeReminders) {
@@ -88,7 +94,7 @@ module.exports = {
                     cancelReminder(rem.id);
                 }
 
-                return sendResponse(res, `✅ ${activeReminders.length} reminder berulang berhasil dibatalkan!`, isTwilioWebhook);
+                return await sendResponse(res, `✅ ${activeReminders.length} reminder berulang berhasil dibatalkan!`, isTwilioWebhook, from);
             }
 
             if (ai.intent === 'cancel_all') {
@@ -102,7 +108,7 @@ module.exports = {
                 });
 
                 if (allActiveReminders.length === 0) {
-                    return sendResponse(res, 'Tidak ada reminder aktif untuk dibatalkan 😊', isTwilioWebhook);
+                    return await sendResponse(res, 'Tidak ada reminder aktif untuk dibatalkan 😊', isTwilioWebhook, from);
                 }
 
                 for (const rem of allActiveReminders) {
@@ -111,7 +117,7 @@ module.exports = {
                     cancelReminder(rem.id);
                 }
 
-                return sendResponse(res, `✅ Semua ${allActiveReminders.length} reminder berhasil dibatalkan!`, isTwilioWebhook);
+                return await sendResponse(res, `✅ Semua ${allActiveReminders.length} reminder berhasil dibatalkan!`, isTwilioWebhook, from);
             }
 
             if (ai.intent === 'cancel_specific' && ai.cancelKeyword) {
@@ -126,7 +132,7 @@ module.exports = {
                 });
 
                 if (specificReminders.length === 0) {
-                    return sendResponse(res, `Tidak ada reminder aktif yang mengandung kata "${ai.cancelKeyword}" 😊`, isTwilioWebhook);
+                    return await sendResponse(res, `Tidak ada reminder aktif yang mengandung kata "${ai.cancelKeyword}" 😊`, isTwilioWebhook, from);
                 }
 
                 for (const rem of specificReminders) {
@@ -136,7 +142,7 @@ module.exports = {
                 }
 
                 const reminderTitles = specificReminders.map(r => `"${r.title}"`).join(', ');
-                return sendResponse(res, `✅ ${specificReminders.length} reminder dibatalkan: ${reminderTitles}`, isTwilioWebhook);
+                return await sendResponse(res, `✅ ${specificReminders.length} reminder dibatalkan: ${reminderTitles}`, isTwilioWebhook, from);
             }
 
             if (ai.intent === 'list') {
@@ -151,7 +157,7 @@ module.exports = {
                 });
 
                 if (activeReminders.length === 0) {
-                    return sendResponse(res, 'Tidak ada reminder aktif saat ini 😊', isTwilioWebhook);
+                    return await sendResponse(res, 'Tidak ada reminder aktif saat ini 😊', isTwilioWebhook, from);
                 }
 
                 let listMessage = `📋 *Daftar Reminder Aktif (${activeReminders.length}):*\n\n`;
@@ -163,7 +169,7 @@ module.exports = {
 
                 listMessage += '💡 _Ketik "stop reminder [nama]" untuk membatalkan reminder tertentu_';
 
-                return sendResponse(res, listMessage, isTwilioWebhook);
+                return await sendResponse(res, listMessage, isTwilioWebhook, from);
             }
 
             // CREATE REMINDER
@@ -217,7 +223,7 @@ module.exports = {
                     // Cari user berdasarkan username
                     const targetUser = await User.findOne({ where: { username } });
                     if (!targetUser) {
-                        return sendResponse(res, `User @${username} tidak ditemukan. Pastikan username benar dan user sudah terdaftar.`, isTwilioWebhook);
+                        return await sendResponse(res, `User @${username} tidak ditemukan. Pastikan username benar dan user sudah terdaftar.`, isTwilioWebhook, from);
                     }
 
                     // Cek apakah sudah berteman
@@ -231,7 +237,7 @@ module.exports = {
                     });
 
                     if (!friendship) {
-                        return sendResponse(res, `Kamu belum berteman dengan @${username}. Kirim undangan pertemanan dulu ya 😊`, isTwilioWebhook);
+                        return await sendResponse(res, `Kamu belum berteman dengan @${username}. Kirim undangan pertemanan dulu ya 😊`, isTwilioWebhook, from);
                     }
 
                     recipients.push(targetUser);
@@ -291,7 +297,21 @@ module.exports = {
                 count: createdReminders.length
             });
 
-            return sendResponse(res, confirmMsg, isTwilioWebhook);
+            // Send confirmation message back to user
+            if (isTwilioWebhook) {
+                // For Twilio webhook, we need to actively send the confirmation message
+                const { sendReminder } = require('../services/waOutbound');
+                try {
+                    await sendReminder(from, confirmMsg, null);
+                    console.log('[WA] Confirmation sent to:', from);
+                } catch (error) {
+                    console.error('[WA] Failed to send confirmation:', error);
+                }
+                // Return empty TwiML response since we've already sent the message
+                return res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+            }
+
+            return await sendResponse(res, confirmMsg, isTwilioWebhook, from);
         } catch (err) {
             console.error('ERROR WA INBOUND', err);
             return res.status(500).json({ message: 'Internal server error' });
