@@ -172,43 +172,81 @@ module.exports = {
                 return await sendResponse(res, listMessage, isTwilioWebhook, from);
             }
 
-            // CREATE REMINDER
-            let title = (ai.title || '').trim() || extractTitleFromText(text);
-            let dueAtUTC = ai.dueAtWIB;
-            let repeat = ai.repeat || 'none';
+            // ENHANCED CREATE REMINDER with Dynamic Time Parsing
+            const title = (ai.title || '').trim() || extractTitleFromText(text);
+            const repeat = ai.repeat || 'none';
+            const timeType = ai.timeType || 'relative';
+            const repeatDetails = ai.repeatDetails || {};
+            
+            console.log('[WA] AI parsing result:', {
+                title,
+                timeType,
+                dueAtWIB: ai.dueAtWIB,
+                repeat,
+                repeatDetails
+            });
 
-            const t = (text || '').toLowerCase();
+            // Enhanced time processing based on timeType
+            let dueDate;
             const nowWIB = DateTime.now().setZone(WIB_TZ);
 
-            // Heuristik fallback waktu jika AI tidak mendeteksi
-            if (!dueAtUTC) {
-                const m = t.match(/(\d+)\s*menit/i);
-                const h = t.match(/(\d+)\s*jam/i);
-                const besok = /\bbesok\b/i.test(t);
+            if (ai.dueAtWIB) {
+                // AI successfully parsed the time
+                const parsedTime = DateTime.fromISO(ai.dueAtWIB);
+                if (parsedTime.isValid) {
+                    dueDate = parsedTime.toUTC().toJSDate();
+                } else {
+                    console.warn('[WA] Invalid AI parsed time, using fallback');
+                    dueDate = nowWIB.plus({ minutes: 5 }).toUTC().toJSDate();
+                }
+            } else {
+                // Fallback parsing
+                console.log('[WA] Using fallback time parsing for:', text);
+                dueDate = nowWIB.plus({ minutes: 5 }).toUTC().toJSDate();
+            }
 
-                if (m) dueAtUTC = nowWIB.plus({ minutes: Number(m[1]) }).toUTC().toISO();
-                else if (h) dueAtUTC = nowWIB.plus({ hours: Number(h[1]) }).toUTC().toISO();
-                else if (besok) {
-                    dueAtUTC = nowWIB
-                        .plus({ days: 1 })
-                        .set({ hour: 9, minute: 0, second: 0, millisecond: 0 })
-                        .toUTC()
-                        .toISO();
+            // Additional validation for recurring reminders
+            if (repeat !== 'none' && repeatDetails.timeOfDay) {
+                try {
+                    const [hour, minute] = repeatDetails.timeOfDay.split(':').map(Number);
+                    let nextExecution = nowWIB.set({ hour, minute, second: 0, millisecond: 0 });
+                    
+                    // If time has passed today, schedule for tomorrow/next occurrence
+                    if (nextExecution <= nowWIB) {
+                        switch (repeat) {
+                            case 'daily':
+                                nextExecution = nextExecution.plus({ days: 1 });
+                                break;
+                            case 'weekly':
+                                nextExecution = nextExecution.plus({ weeks: 1 });
+                                break;
+                            case 'monthly':
+                                nextExecution = nextExecution.plus({ months: 1 });
+                                break;
+                            case 'hourly':
+                                nextExecution = nowWIB.plus({ hours: 1 }).set({ minute: 0, second: 0, millisecond: 0 });
+                                break;
+                        }
+                    }
+                    
+                    dueDate = nextExecution.toUTC().toJSDate();
+                } catch (error) {
+                    console.error('[WA] Error processing recurring time:', error);
                 }
             }
 
-            // Fallback: +5 menit
-            if (!dueAtUTC) {
-                dueAtUTC = nowWIB.plus({ minutes: 5 }).toUTC().toISO();
-            }
-
-            // Pastikan dueDate valid & future
-            let dueDate = DateTime.fromISO(dueAtUTC).toJSDate();
+            // Final validation
             if (isNaN(dueDate.getTime()) || DateTime.fromJSDate(dueDate) <= DateTime.utc()) {
                 dueDate = nowWIB.plus({ minutes: 5 }).toUTC().toJSDate();
             }
 
-            console.log('[WA] final title:', title, 'dueDateJS:', dueDate.toISOString(), 'repeat:', repeat);
+            console.log('[WA] Final scheduling:', {
+                title,
+                timeType,
+                dueDate: dueDate.toISOString(),
+                repeat,
+                repeatDetails
+            });
 
             // Cari recipients berdasarkan @username atau default ke user sendiri
             let recipients = [user]; // Default: reminder untuk diri sendiri
@@ -271,29 +309,69 @@ module.exports = {
                 createdReminders.push(reminder);
             }
 
-            // Buat response konfirmasi yang ramah menggunakan AI
+            // Enhanced response message based on timeType and repeat
             const recipientNames = recipients.length > 1 
                 ? recipients.map(r => r.name || r.username || 'Unknown').join(', ')
                 : (recipients[0].id === user.id ? 'diri sendiri' : recipients[0].name || recipients[0].username || 'Unknown');
             
+            let timeDescription = '';
             let repeatText = '';
+            
+            // Generate time description based on timeType
+            const scheduledTime = DateTime.fromJSDate(dueDate).setZone(WIB_TZ);
+            
+            if (timeType === 'relative') {
+                const diffMinutes = Math.round(scheduledTime.diff(nowWIB, 'minutes').minutes);
+                if (diffMinutes < 60) {
+                    timeDescription = `${diffMinutes} menit lagi`;
+                } else if (diffMinutes < 1440) {
+                    const hours = Math.round(diffMinutes / 60);
+                    timeDescription = `${hours} jam lagi`;
+                } else {
+                    timeDescription = scheduledTime.toFormat('dd/MM/yyyy HH:mm') + ' WIB';
+                }
+            } else if (timeType === 'absolute') {
+                const isToday = scheduledTime.hasSame(nowWIB, 'day');
+                const isTomorrow = scheduledTime.hasSame(nowWIB.plus({ days: 1 }), 'day');
+                
+                if (isToday) {
+                    timeDescription = `hari ini jam ${scheduledTime.toFormat('HH:mm')} WIB`;
+                } else if (isTomorrow) {
+                    timeDescription = `besok jam ${scheduledTime.toFormat('HH:mm')} WIB`;
+                } else {
+                    timeDescription = scheduledTime.toFormat('dd/MM/yyyy HH:mm') + ' WIB';
+                }
+            } else if (timeType === 'recurring') {
+                timeDescription = scheduledTime.toFormat('dd/MM/yyyy HH:mm') + ' WIB (mulai)';
+            }
+            
+            // Generate repeat description
             if (repeat !== 'none') {
-                if (repeat === 'hourly') {
-                    repeatText = ' (setiap jam)';
-                } else if (repeat === 'daily') {
-                    repeatText = ' (setiap hari)';
-                } else if (repeat === 'weekly') {
-                    repeatText = ' (setiap minggu)';
-                } else if (repeat === 'monthly') {
-                    repeatText = ' (setiap bulan)';
+                const repeatMap = {
+                    'hourly': 'setiap jam',
+                    'daily': 'setiap hari',
+                    'weekly': 'setiap minggu', 
+                    'monthly': 'setiap bulan'
+                };
+                repeatText = ` (${repeatMap[repeat]})`;
+                
+                if (repeatDetails.timeOfDay) {
+                    repeatText += ` pada ${repeatDetails.timeOfDay} WIB`;
+                }
+                if (repeatDetails.dayOfWeek) {
+                    repeatText += ` hari ${repeatDetails.dayOfWeek}`;
+                }
+                if (repeatDetails.dayOfMonth) {
+                    repeatText += ` tanggal ${repeatDetails.dayOfMonth}`;
                 }
             }
             
             const confirmMsg = await generateReply('confirm', {
                 title,
                 recipients: recipientNames,
-                dueTime: DateTime.fromJSDate(dueDate).setZone(WIB_TZ).toFormat('dd/MM/yyyy HH:mm') + ' WIB',
-                repeat: repeatText,
+                timeDescription,
+                repeatText,
+                timeType,
                 count: createdReminders.length
             });
 
