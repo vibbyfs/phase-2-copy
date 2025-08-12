@@ -20,9 +20,16 @@ async function scheduleReminder(reminder) {
     const job = schedule.scheduleJob(reminder.id.toString(), runAt, async () => {
       try {
         console.log('[SCHED] fire job', { id: reminder.id, at: new Date().toISOString() });
-        const owner = await User.findByPk(reminder.UserId);
-        const recipient = reminder.RecipientId ? await User.findByPk(reminder.RecipientId) : owner;
+        
+        // Get the actual recipient user
+        const recipient = await User.findByPk(reminder.RecipientId);
+        if (!recipient) {
+          console.error('[SCHED] Recipient not found for reminder:', reminder.id);
+          return;
+        }
+        
         const to = recipient.phone;
+        console.log('[SCHED] sending to recipient:', { recipientId: recipient.id, phone: to, username: recipient.username });
 
         // Generate personal reminder message
         let message = reminder.formattedMessage;

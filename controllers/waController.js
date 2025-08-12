@@ -298,8 +298,8 @@ module.exports = {
                 }
 
                 const reminder = await Reminder.create({
-                    UserId: user.id,
-                    RecipientId: recipient.id === user.id ? null : recipient.id,
+                    UserId: user.id, // Creator of the reminder
+                    RecipientId: recipient.id, // Always set recipient ID (could be self or friend)
                     title,
                     dueAt: dueDate,
                     repeat: repeat,
