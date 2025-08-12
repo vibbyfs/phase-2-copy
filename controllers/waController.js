@@ -174,7 +174,7 @@ module.exports = {
 
             // ENHANCED CREATE REMINDER with Dynamic Time Parsing
             const title = (ai.title || '').trim() || extractTitleFromText(text);
-            const repeat = ai.repeat || 'none';
+            let repeat = ai.repeat || 'none';
             const timeType = ai.timeType || 'relative';
             const repeatDetails = ai.repeatDetails || {};
             
