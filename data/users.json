@@ -1,0 +1,22 @@
+[
+  {
+    "id": 1,
+    "username": "vibbyfs",
+    "phone": "+6281324985365",
+    "email": "alya@example.com",
+    "password": "password",
+    "timezone": "Asia/Jakarta",
+    "createdAt": "2025-08-09T14:00:00Z",
+    "updatedAt": "2025-08-09T14:00:00Z"
+  },
+  {
+    "id": 2,
+    "username": "dimas",
+    "phone": "+6287713371997",
+    "email": "rizky@example.com",
+    "password": "password",
+    "timezone": "Asia/Jakarta",
+    "createdAt": "2025-08-09T14:05:00Z",
+    "updatedAt": "2025-08-09T14:05:00Z"
+  }
+]

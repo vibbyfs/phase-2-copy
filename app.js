@@ -1,0 +1,34 @@
+if (process.env.NODE_ENV !== 'production') {
+    require('dotenv').config()
+}
+const express = require('express')
+const app = express()
+const cors = require('cors')
+const { loadAllScheduledReminders } = require('./services/scheduler');
+const authentication = require('./middleware/authentication')
+const erroHandler = require('./middleware/errorHandler')
+
+app.use(express.urlencoded({ extended: true }))
+app.use(express.json())
+app.use(cors())
+
+app.use('/api/auth', require('./routes/auth.routes'));
+app.use('/api/users', authentication, require('./routes/users.routes'));
+app.use('/api/reminders', authentication, require('./routes/reminders.routes'));
+app.use('/api/friends', authentication, require('./routes/friends.routes'));
+app.use('/api/wa', require('./routes/wa.routes'));
+
+(async () => {
+  try {
+    await loadAllScheduledReminders();
+    console.log('Scheduler: all scheduled reminders loaded');
+  } catch (e) {
+    console.error('Scheduler init error', e);
+  }
+})();
+
+app.use(erroHandler)
+
+module.exports = app
+
+

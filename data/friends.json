@@ -1,0 +1,18 @@
+[
+  {
+    "id": 1,
+    "UserId": 1,
+    "FriendId": 2,
+    "status": "accepted",
+    "createdAt": "2025-08-09T14:20:00Z",
+    "updatedAt": "2025-08-09T14:20:00Z"
+  },
+  {
+    "id": 2,
+    "UserId": 2,
+    "FriendId": 1,
+    "status": "accepted",
+    "createdAt": "2025-08-09T14:21:00Z",
+    "updatedAt": "2025-08-09T14:21:00Z"
+  }
+]
