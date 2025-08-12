@@ -48,6 +48,12 @@ module.exports = {
                 text = req.body.text;
             }
             
+            // Validate required fields
+            if (!from || !text) {
+                console.log('[WA] Invalid request - missing from or text:', { from, text });
+                return res.status(400).json({ error: 'Missing required fields: from and text' });
+            }
+            
             console.log('[WA] inbound from:', from, 'text:', text);
 
             // Cari user berdasarkan phone
