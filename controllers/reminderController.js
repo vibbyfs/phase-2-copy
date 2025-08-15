@@ -7,37 +7,30 @@ class ReminderController {
   static async getAllReminders(req, res, next) {
     try {
       const userId = req.user.id;
-      const { search, filter, sort } = req.query
+      const { search, filter, sort } = req.query;
 
-      let queryOption = {
-        where: {}
-      }
+      const where = { UserId: userId };
 
       if (search) {
-        queryOption.where = {
-          title: { [Op.iLike]: `%${search}%` }
-        }
+        where.title = { [Op.iLike]: `%${search}%` };
       }
 
       if (filter) {
-        queryOption.status = filter
+        where.status = filter;
       }
 
-      if (sort) {
-        queryOption.order = [
-          ['createdAt', sort]
-        ]
-      }
+      const order = [
+        ['createdAt', (String(sort || '').toUpperCase() === 'ASC') ? 'ASC' : 'DESC'],
+      ];
 
-      const reminders = await Reminder.findAll(queryOption, {
-        where: { UserId: userId }
-      })
+      const reminders = await Reminder.findAll({ where, order });
 
-      res.status(200).json(reminders)
+      return res.status(200).json(reminders);
     } catch (err) {
       next(err);
     }
   }
+
 
   static async cancelReminderById(req, res, next) {
     try {

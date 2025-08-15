@@ -2,9 +2,14 @@ const { User } = require('../models')
 
 class UserController {
 
-    static async getProfiles(req, res, next) {
+    static async getProfilesById(req, res, next) {
         try {
-            const profile = await User.findAll()
+            const id = req.user.id
+            const profile = await User.findByPk(id)
+            if (!profile) {
+                throw ({ name: 'NotFound', message: 'Profile not found' })
+
+            }
 
             res.status(201).json(profile)
         } catch (err) {
