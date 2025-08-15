@@ -1,157 +1,86 @@
-const { Reminder, User, Friend } = require('../models');
-const { scheduleReminder, cancelReminder } = require('../services/scheduler');
-const { DateTime } = require('luxon');
+const { Reminder } = require('../models');
+const { cancelReminder } = require('../services/scheduler');
 const { Op } = require('sequelize');
 
-/**
- * Simplified ReminderController - hanya fitur core yang diperlukan:
- * 1. Get active reminders
- * 2. Cancel reminders by keyword (untuk stop natural language)
- * 3. Cancel all recurring reminders  
- */
 class ReminderController {
-  
-  // Get active reminders untuk user
-  static async getActiveReminders(req, res, next) {
+
+  static async getAllReminders(req, res, next) {
     try {
       const userId = req.user.id;
+      const { search, filter, sort } = req.query
 
-      const activeReminders = await Reminder.findAll({
-        where: {
-          UserId: userId,
-          status: 'scheduled'
-        },
-        order: [['dueAt', 'ASC']]
-      });
-
-      const formattedReminders = activeReminders.map(reminder => ({
-        id: reminder.id,
-        title: reminder.title,
-        dueAt: reminder.dueAt,
-        repeat: reminder.repeat,
-        recipientId: reminder.RecipientId,
-        createdAt: reminder.createdAt
-      }));
-
-      res.status(200).json({
-        count: activeReminders.length,
-        reminders: formattedReminders
-      });
-    } catch (err) {
-      next(err);
-    }
-  }
-
-  // Cancel reminders berdasarkan keyword (untuk stop natural language)
-  static async cancelRemindersByKeyword(req, res, next) {
-    try {
-      const userId = req.user.id;
-      const { keyword } = req.body;
-
-      if (!keyword) {
-        throw { name: 'BadRequest', message: 'Keyword wajib diisi.' };
+      let queryOption = {
+        where: {}
       }
 
-      // Cari reminder berdasarkan keyword di title
-      const reminders = await Reminder.findAll({
-        where: {
-          UserId: userId,
-          status: 'scheduled',
-          title: { [Op.iLike]: `%${keyword}%` }
+      if (search) {
+        queryOption.where = {
+          title: { [Op.iLike]: `%${search}%` }
         }
-      });
-
-      if (reminders.length === 0) {
-        return res.status(200).json({ 
-          message: `Tidak ada reminder aktif yang mengandung kata "${keyword}"` 
-        });
       }
 
-      // Batalkan reminder yang ditemukan
-      for (const reminder of reminders) {
-        reminder.status = 'cancelled';
-        await reminder.save();
-        cancelReminder(reminder.id);
+      if (filter) {
+        queryOption.status = filter
       }
 
-      res.status(200).json({ 
-        message: `${reminders.length} reminder dengan kata "${keyword}" berhasil dibatalkan`,
-        cancelledCount: reminders.length,
-        cancelledReminders: reminders.map(r => ({ id: r.id, title: r.title }))
-      });
+      if (sort) {
+        queryOption.order = [
+          ['createdAt', sort]
+        ]
+      }
+
+      const reminders = await Reminder.findAll(queryOption, {
+        where: { UserId: userId }
+      })
+
+      res.status(200).json(reminders)
     } catch (err) {
       next(err);
     }
   }
 
-  // Cancel semua recurring reminders untuk user
-  static async cancelRecurringReminders(req, res, next) {
+  static async cancelReminderById(req, res, next) {
     try {
-      const userId = req.user.id;
+      const id = req.params.id;
+      const { status } = req.body;
 
-      const activeReminders = await Reminder.findAll({
-        where: { 
-          UserId: userId, 
-          status: 'scheduled',
-          repeat: { [Op.ne]: 'none' }
-        }
-      });
-
-      if (activeReminders.length === 0) {
-        return res.status(200).json({ 
-          message: 'Tidak ada reminder berulang yang aktif untuk dibatalkan' 
-        });
+      const reminder = await Reminder.findByPk(id);
+      if (!reminder) {
+        throw { name: 'NotFound', message: 'Reminder not found' };
       }
 
-      // Batalkan semua recurring reminders
-      for (const reminder of activeReminders) {
-        reminder.status = 'cancelled';
-        await reminder.save();
-        cancelReminder(reminder.id);
+      if (reminder.status !== 'scheduled') {
+        return res.status(400).json({ message: 'Reminder is not active' });
       }
 
-      res.status(200).json({ 
-        message: `${activeReminders.length} reminder berulang berhasil dibatalkan`,
-        cancelledCount: activeReminders.length
-      });
+      await reminder.update({ status });
+      cancelReminder(reminder.id);
+
+      res.status(200).json({ message: 'Reminder has been cancelled' });
     } catch (err) {
       next(err);
     }
   }
 
-  // Cancel semua reminders (termasuk non-recurring)
-  static async cancelAllReminders(req, res, next) {
+  static async deleteReminderById(req, res, next) {
     try {
-      const userId = req.user.id;
+      const id = req.params.id;
 
-      const activeReminders = await Reminder.findAll({
-        where: { 
-          UserId: userId, 
-          status: 'scheduled'
-        }
-      });
-
-      if (activeReminders.length === 0) {
-        return res.status(200).json({ 
-          message: 'Tidak ada reminder aktif untuk dibatalkan' 
-        });
+      const reminder = await Reminder.findByPk(id);
+      if (!reminder) {
+        throw { name: 'NotFound', message: 'Reminder not found' };
       }
 
-      // Batalkan semua reminders
-      for (const reminder of activeReminders) {
-        reminder.status = 'cancelled';
-        await reminder.save();
-        cancelReminder(reminder.id);
-      }
+      cancelReminder(reminder.id);
 
-      res.status(200).json({ 
-        message: `${activeReminders.length} reminder berhasil dibatalkan`,
-        cancelledCount: activeReminders.length
-      });
+      await reminder.destroy();
+
+      res.status(200).json({ message: 'Reminder has been deleted' });
     } catch (err) {
       next(err);
     }
   }
+
 }
 
 module.exports = ReminderController;

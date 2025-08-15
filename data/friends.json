@@ -11,7 +11,7 @@
     "id": 2,
     "UserId": 2,
     "FriendId": 1,
-    "status": "accepted",
+    "status": "pending",
     "createdAt": "2025-08-09T14:21:00Z",
     "updatedAt": "2025-08-09T14:21:00Z"
   }

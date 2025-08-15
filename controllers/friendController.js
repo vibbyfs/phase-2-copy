@@ -1,147 +1,139 @@
 const { Friend, User } = require('../models');
 const { Op } = require('sequelize');
 
-/**
- * FriendController menangani daftar teman, mengirim undangan, serta menerima/menolak undangan.
- */
 class FriendController {
 
-    /**
-     * GET /api/friends
-     * Mengembalikan daftar relasi teman bagi user login, termasuk status 'pending' dan 'accepted'.
-     * Menampilkan semua entri di mana user sebagai pengirim atau penerima.
-     */
     static async getFriends(req, res, next) {
         try {
             const userId = req.user.id;
+            const { search, status, direction, sort = 'DESC' } = req.query;
 
-            const friends = await Friend.findAll({
-                where: {
-                    [Op.or]: [
-                        { UserId: userId },
-                        { FriendId: userId }
-                    ]
-                },
-                order: [['id', 'ASC']]
+            const where = { [Op.or]: [{ UserId: userId }, { FriendId: userId }] };
+            if (status) where.status = status;
+
+            if (direction === 'incoming') {
+                where.FriendId = userId;
+                delete where[Op.or];
+            } else if (direction === 'outgoing') {
+                where.UserId = userId;
+                delete where[Op.or];
+            }
+
+            const include = [
+                { model: User, as: 'requester', attributes: ['id', 'username'] },
+                { model: User, as: 'receiver', attributes: ['id', 'username'] },
+            ];
+
+            if (search) {
+                include[0].where = { username: { [Op.iLike]: `%${search}%` } };
+                include[1].where = { username: { [Op.iLike]: `%${search}%` } };
+                include[0].required = false;
+                include[1].required = false;
+            }
+
+            const rows = await Friend.findAll({
+                where,
+                include,
+                order: [['createdAt', sort]],
             });
 
-            res.status(200).json(friends);
+            const data = rows.map(f => {
+                const isIncoming = f.FriendId === userId;
+                const other = isIncoming ? f.requester : f.receiver;
+                return {
+                    id: f.id,
+                    status: f.status,
+                    direction: isIncoming ? 'incoming' : 'outgoing',
+                    createdAt: f.createdAt,
+                    otherUser: other ? { id: other.id, username: other.username } : null,
+                };
+            });
+
+            res.status(200).json(data);
         } catch (err) {
-            console.log('ERROR GET FRIENDS', err);
             next(err);
         }
     }
 
-    /**
-     * POST /api/friends
-     * Membuat undangan pertemanan baru.
-     * Body menerima `phone` (string) atau `friendId` (angka).
-     */
-    static async createFriend(req, res, next) {
+    static async sendFriendRequest(req, res, next) {
         try {
             const userId = req.user.id;
-            let { phone, friendId } = req.body;
+            const { username } = req.body;
 
-            // Dapatkan friendId dari phone jika phone diberikan
-            if (phone) {
-                const target = await User.findOne({ where: { phone } });
-                if (!target) {
-                    throw { name: 'NotFound', message: 'User dengan nomor tersebut tidak ditemukan.' };
-                }
-                friendId = target.id;
-            }
+            if (!username) throw { name: 'BadRequest', message: 'Username wajib diisi.' };
 
-            if (!friendId) {
-                throw { name: 'BadRequest', message: 'friendId atau phone wajib diisi.' };
-            }
+            const target = await User.findOne({ where: { username } });
+            if (!target) throw { name: 'NotFound', message: 'User tidak ditemukan.' };
+            if (target.id === userId) throw { name: 'BadRequest', message: 'Tidak dapat mengundang diri sendiri.' };
 
-            if (friendId === userId) {
-                throw { name: 'BadRequest', message: 'Tidak dapat mengundang diri sendiri.' };
-            }
+            const exists = await Friend.findOne({ where: { UserId: userId, FriendId: target.id } });
+            if (exists) throw { name: 'BadRequest', message: 'Permintaan sudah pernah dibuat.' };
 
-            // Cek apakah sudah ada relasi
-            const existing = await Friend.findOne({
-                where: {
-                    UserId: userId,
-                    FriendId: friendId
-                }
-            });
-
-            if (existing) {
-                throw { name: 'BadRequest', message: 'Undangan teman sudah pernah dibuat.' };
-            }
-
-            const newFriend = await Friend.create({
-                UserId: userId,
-                FriendId: friendId,
-                status: 'pending'
-            });
-
-            res.status(201).json(newFriend);
+            const created = await Friend.create({ UserId: userId, FriendId: target.id, status: 'pending' });
+            res.status(201).json(created);
         } catch (err) {
-            console.log('ERROR CREATE FRIEND', err);
             next(err);
         }
     }
 
-    /**
-     * PUT /api/friends/:id
-     * Menerima atau menolak undangan pertemanan.
-     * Hanya penerima (FriendId) yang boleh mengeksekusi endpoint ini.
-     * Body: { action: 'accept' | 'reject' }
-     */
-    static async updateFriend(req, res, next) {
+    static async respondFriendRequest(req, res, next) {
         try {
             const userId = req.user.id;
             const { id } = req.params;
             const { action } = req.body;
 
             const friend = await Friend.findByPk(id);
-            if (!friend) {
-                throw { name: 'NotFound', message: 'Relasi teman tidak ditemukan.' };
-            }
-
-            // Pastikan user yang meng-accept adalah penerima undangan
-            if (friend.FriendId !== userId) {
-                throw { name: 'Forbidden', message: 'Anda tidak berhak memproses undangan ini.' };
-            }
-
-            if (friend.status !== 'pending') {
-                throw { name: 'BadRequest', message: 'Undangan telah diproses sebelumnya.' };
-            }
+            if (!friend) throw { name: 'NotFound', message: 'Undangan tidak ditemukan.' };
+            if (friend.FriendId !== userId) throw { name: 'Forbidden', message: 'Tidak berhak memproses undangan ini.' };
+            if (friend.status !== 'pending') throw { name: 'BadRequest', message: 'Undangan sudah diproses.' };
 
             if (action === 'accept') {
-                // Update status menjadi accepted
                 await friend.update({ status: 'accepted' });
 
-                // Buat relasi balik jika belum ada
                 const reciprocal = await Friend.findOne({
-                    where: {
-                        UserId: userId,
-                        FriendId: friend.UserId
-                    }
+                    where: { UserId: userId, FriendId: friend.UserId },
                 });
 
                 if (!reciprocal) {
                     await Friend.create({
                         UserId: userId,
                         FriendId: friend.UserId,
-                        status: 'accepted'
+                        status: 'accepted',
                     });
-                } else {
+                } else if (reciprocal.status !== 'accepted') {
                     await reciprocal.update({ status: 'accepted' });
                 }
 
-                return res.status(200).json({ id: friend.id, status: 'accepted' });
+                res.status(200).json({ id: friend.id, status: 'accepted' });
             } else if (action === 'reject') {
-                // Hapus undangan (tolak)
                 await friend.destroy();
-                return res.status(200).json({ id: friend.id, status: 'rejected' });
+                res.status(200).json({ id: id, status: 'rejected' });
             } else {
                 throw { name: 'BadRequest', message: 'Action tidak valid. Gunakan accept atau reject.' };
             }
         } catch (err) {
-            console.log('ERROR UPDATE FRIEND', err);
+            next(err);
+        }
+    }
+
+    static async deleteFriend(req, res, next) {
+        try {
+            const userId = req.user.id;
+            const { id } = req.params;
+
+            const friend = await Friend.findByPk(id);
+            if (!friend) throw { name: 'NotFound', message: 'Relasi tidak ditemukan.' };
+            if (friend.UserId !== userId && friend.FriendId !== userId)
+                throw { name: 'Forbidden', message: 'Tidak berhak menghapus relasi ini.' };
+
+            await friend.destroy();
+
+            await Friend.destroy({
+                where: { UserId: friend.FriendId, FriendId: friend.UserId },
+            });
+
+            res.status(200).json({ message: 'Relasi pertemanan dihapus.' });
+        } catch (err) {
             next(err);
         }
     }

@@ -6,7 +6,7 @@
     "title": "Meeting dengan tim desain",
     "dueAt": "2025-08-10T03:00:00Z",
     "repeat": "none",
-    "status": "scheduled",
+    "status": "sent",
     "createdAt": "2025-08-09T14:10:00Z",
     "updatedAt": "2025-08-09T14:10:00Z"
   },
@@ -17,7 +17,7 @@
     "title": "Kirim laporan mingguan",
     "dueAt": "2025-08-11T02:00:00Z",
     "repeat": "weekly",
-    "status": "scheduled",
+    "status": "sent",
     "createdAt": "2025-08-09T14:15:00Z",
     "updatedAt": "2025-08-09T14:15:00Z"
   }

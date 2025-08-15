@@ -2,10 +2,8 @@ const express = require('express');
 const router = express.Router();
 const ReminderController = require('../controllers/reminderController');
 
-// Simplified routes - hanya yang diperlukan untuk fitur core
-router.get('/active', ReminderController.getActiveReminders);
-router.delete('/recurring/cancel', ReminderController.cancelRecurringReminders);
-router.delete('/all/cancel', ReminderController.cancelAllReminders);
-router.post('/cancel-by-keyword', ReminderController.cancelRemindersByKeyword);
+router.get('/actives', ReminderController.getAllReminders);
+router.put('/cancel/:id', ReminderController.cancelReminderById);
+router.delete('/delete/:id', ReminderController.deleteReminderById);
 
 module.exports = router;
