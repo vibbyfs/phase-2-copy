@@ -4,11 +4,7 @@ const {
 } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class Friend extends Model {
-    /**
-     * Helper method for defining associations.
-     * This method is not a part of Sequelize lifecycle.
-     * The `models/index` file will call this method automatically.
-     */
+
     static associate(models) {
       Friend.belongsTo(models.User, { as: 'requester', foreignKey: 'UserId' });
       Friend.belongsTo(models.User, { as: 'receiver', foreignKey: 'FriendId' });
@@ -16,6 +12,12 @@ module.exports = (sequelize, DataTypes) => {
     }
   }
   Friend.init({
+    id: {
+      type: DataTypes.INTEGER,
+      allowNull: false,
+      autoIncrement: true,
+      primaryKey: true
+    },
     UserId: {
       type: DataTypes.INTEGER,
       allowNull: false
