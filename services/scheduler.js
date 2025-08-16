@@ -1,126 +1,96 @@
-const schedule = require('node-schedule');
-const { Reminder, User } = require('../models');
-const { sendReminder } = require('./waOutbound');
+import schedule from "node-schedule";
+import { sendMessage } from "./waOutbound.js";
 
-const jobs = {};
+/**
+ * Simpan jadwal reminder yang aktif
+ * Struktur: { [userId]: [ { job, activity, time } ] }
+ */
+const reminders = {};
 
-async function scheduleReminder(reminder) {
-  try {
-    if (!reminder || reminder.status !== 'scheduled') return;
-    const runAt = new Date(reminder.dueAt);
-    if (!(runAt instanceof Date) || isNaN(runAt.getTime()) || runAt <= new Date()) {
-      console.log('[SCHED] skip (invalid/past)', { id: reminder.id, dueAt: reminder.dueAt });
-      return;
+/**
+ * Format waktu untuk ditampilkan ke user
+ */
+function formatDateTime(date) {
+  return new Intl.DateTimeFormat("id-ID", {
+    dateStyle: "full",
+    timeStyle: "short",
+  }).format(date);
+}
+
+/**
+ * Buat jadwal reminder
+ */
+export async function scheduleReminder(user, activity, time) {
+  if (!user || !user.phone) {
+    throw new Error("User tidak valid untuk membuat pengingat.");
+  }
+
+  let reminderTime;
+
+  if (typeof time === "string" || typeof time === "number") {
+    // Bisa berupa "in 5 minutes" atau timestamp
+    reminderTime = new Date(time);
+  } else if (time instanceof Date) {
+    reminderTime = time;
+  } else {
+    throw new Error("Format waktu tidak dikenali.");
+  }
+
+  if (reminderTime < new Date()) {
+    throw new Error("Waktu pengingat sudah lewat.");
+  }
+
+  // Buat job baru
+  const job = schedule.scheduleJob(reminderTime, async () => {
+    try {
+      const message = `🔔 Hai ${user.username || "teman"}! Ini pengingatmu untuk *${activity}* sekarang. Semangat ya! ✨`;
+      await sendMessage(user.phone, message);
+    } catch (err) {
+      console.error("[Scheduler] Gagal kirim pengingat:", err);
     }
+  });
 
-    // Batalkan job lama bila ada
-    cancelReminder(reminder.id);
+  // Simpan job ke daftar reminders
+  if (!reminders[user.id]) reminders[user.id] = [];
+  reminders[user.id].push({ job, activity, time: reminderTime });
 
-    console.log('[SCHED] create job', { id: reminder.id, runAt: runAt.toISOString() });
-    const job = schedule.scheduleJob(reminder.id.toString(), runAt, async () => {
-      try {
-        console.log('[SCHED] fire job', { id: reminder.id, at: new Date().toISOString() });
-        
-        // Get the actual recipient user
-        const recipient = await User.findByPk(reminder.RecipientId);
-        if (!recipient) {
-          console.error('[SCHED] Recipient not found for reminder:', reminder.id);
-          return;
-        }
-        
-        const to = recipient.phone;
-        console.log('[SCHED] sending to recipient:', { recipientId: recipient.id, phone: to, username: recipient.username });
+  console.log(
+    `[Scheduler] Reminder dibuat: ${activity} untuk ${user.phone} pada ${reminderTime}`
+  );
 
-        // Generate personal reminder message
-        let message = reminder.formattedMessage;
-        if (!message) {
-          // Import generateReply function untuk membuat pesan yang personal
-          const { generateReply } = require('./ai');
-          
-          // Get sender info untuk reminder ke teman
-          const sender = await User.findByPk(reminder.UserId);
-          const isForFriend = reminder.RecipientId !== null;
-          
-          const context = {
-            title: reminder.title,
-            userName: recipient.name || recipient.username || 'kamu'
-          };
-          
-          // Tambahkan info pengirim jika reminder untuk teman
-          if (isForFriend && sender) {
-            context.senderName = sender.name || sender.username || 'Teman';
-            context.isForFriend = true;
-          }
-          
-          message = await generateReply('reminder', context);
-        }
-        
-        await sendReminder(to, message, reminder.id);
-
-        // Handle repeat patterns - disederhanakan hanya hourly, daily, weekly, monthly
-        if (reminder.repeat === 'hourly') {
-          reminder.dueAt = new Date(reminder.dueAt.getTime() + 60 * 60 * 1000); // +1 hour
-          reminder.status = 'scheduled';
-          await reminder.save();
-          await scheduleReminder(reminder);
-        } else if (reminder.repeat === 'daily') {
-          reminder.dueAt = new Date(reminder.dueAt.getTime() + 24 * 60 * 60 * 1000); // +1 day
-          reminder.status = 'scheduled';
-          await reminder.save();
-          await scheduleReminder(reminder);
-        } else if (reminder.repeat === 'weekly') {
-          reminder.dueAt = new Date(reminder.dueAt.getTime() + 7 * 24 * 60 * 60 * 1000); // +7 days
-          reminder.status = 'scheduled';
-          await reminder.save();
-          await scheduleReminder(reminder);
-        } else if (reminder.repeat === 'monthly') {
-          // Tambah 1 bulan dengan mempertahankan tanggal yang sama
-          const currentDate = new Date(reminder.dueAt);
-          const nextMonth = new Date(currentDate);
-          nextMonth.setMonth(currentDate.getMonth() + 1);
-          
-          // Jika tanggal tidak valid (misal 31 Jan -> 28/29 Feb), gunakan hari terakhir bulan
-          if (nextMonth.getDate() !== currentDate.getDate()) {
-            nextMonth.setDate(0); // Set ke hari terakhir bulan sebelumnya
-          }
-          
-          reminder.dueAt = nextMonth;
-          reminder.status = 'scheduled';
-          await reminder.save();
-          await scheduleReminder(reminder);
-        } else {
-          // Reminder sekali (none) - mark as sent
-          reminder.status = 'sent';
-          await reminder.save();
-        }
-      } catch (e) {
-        console.error('[SCHED] error executing job', reminder.id, e);
-      }
-    });
-
-    jobs[reminder.id] = job;
-  } catch (e) {
-    console.error('[SCHED] scheduleReminder error', e);
-  }
+  return {
+    activity,
+    time: formatDateTime(reminderTime),
+  };
 }
 
-function cancelReminder(reminderId) {
-  const job = jobs[reminderId];
-  if (job) {
-    job.cancel();
-    console.log('[SCHED] cancel job', reminderId);
-    delete jobs[reminderId];
-  }
+/**
+ * Lihat semua reminder aktif untuk user
+ */
+export function listReminders(userId) {
+  return reminders[userId] || [];
 }
 
-async function loadAllScheduledReminders() {
-  try {
-    const reminders = await Reminder.findAll({ where: { status: 'scheduled' } });
-    console.log('[SCHED] load scheduled count:', reminders.length);
-    for (const r of reminders) await scheduleReminder(r);
-  } catch (e) {
-    console.error('[SCHED] loadAllScheduledReminders error', e);
-  }
+/**
+ * Batalkan reminder tertentu
+ */
+export function cancelReminder(userId, activity) {
+  if (!reminders[userId]) return false;
+  reminders[userId] = reminders[userId].filter((rem) => {
+    if (rem.activity === activity) {
+      rem.job.cancel();
+      return false;
+    }
+    return true;
+  });
+  return true;
 }
 
-module.exports = { scheduleReminder, cancelReminder, loadAllScheduledReminders };
+/**
+ * Batalkan semua reminder user
+ */
+export function cancelAllReminders(userId) {
+  if (!reminders[userId]) return;
+  reminders[userId].forEach((rem) => rem.job.cancel());
+  reminders[userId] = [];
+}
