@@ -1,10 +1,11 @@
+// services/ai.js
 const { DateTime } = require('luxon');
 const OpenAI = require('openai');
 
 const WIB_TZ = 'Asia/Jakarta';
 
 const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY
+  apiKey: process.env.OPENAI_API_KEY
 });
 
 /**
@@ -16,7 +17,7 @@ const openai = new OpenAI({
 
 async function extract(message) {
   const nowWIB = DateTime.now().setZone(WIB_TZ);
-  
+
   const systemMsg = `
 Kamu adalah asisten pribadi WhatsApp yang hangat dan natural. Kamu ahli mendeteksi niat pembuatan reminder bahkan tanpa kata eksplisit "ingatkan" atau "reminder".
 
@@ -133,53 +134,6 @@ PARSING RULES - CANCEL:
 - "stop reminder [keyword]" → intent: "cancel_specific", cancelKeyword: "[keyword]"
 - "list/tampilkan reminder" → intent: "list"
 
-CONTOH PARSING LENGKAP:
-
-Input: "jemput John nanti" (potential reminder)
-Output: {
-  "intent": "potential_reminder",
-  "title": "Jemput John",
-  "conversationalResponse": "Mau aku bantu bikin pengingat untuk itu? 😊 Kalau iya, kamu mau diingatkan jam berapa?"
-}
-
-Input: "ingatkan saya minum obat" (need time)
-Output: {
-  "intent": "need_time", 
-  "title": "Minum Obat",
-  "conversationalResponse": "Siap! Untuk 'Minum Obat', kamu mau diingatkan kapan?"
-}
-
-Input: "ingatkan saya jam 3" (need content)
-Output: {
-  "intent": "need_content",
-  "dueAtWIB": "${nowWIB.set({hour: 15, minute: 0}).toISO()}",
-  "conversationalResponse": "Noted jamnya! Kamu mau diingatkan tentang apa ya?"
-}
-
-Input: "ingatkan saya minum obat 1 menit lagi" (complete)
-Output: {
-  "intent": "create",
-  "title": "Minum Obat", 
-  "timeType": "relative",
-  "dueAtWIB": "${nowWIB.plus({minutes: 1}).toISO()}",
-  "repeat": "none",
-  "conversationalResponse": "✅ Siap! Aku akan ingatkan kamu untuk 'Minum Obat' 1 menit dari sekarang 😊"
-}
-
-Input: "--reminder makan" (cancel keyword)
-Output: {
-  "intent": "cancel_keyword",
-  "cancelKeyword": "makan",
-  "conversationalResponse": "Mencari pengingat terkait 'makan'..."
-}
-
-Input: "stop (1)" (stop number)
-Output: {
-  "intent": "stop_number",
-  "stopNumber": "1", 
-  "conversationalResponse": "Membatalkan reminder nomor 1..."
-}
-
 Analisis pesan dengan teliti dan berikan JSON yang valid. Pastikan dueAtWIB selalu dalam zona ${WIB_TZ}.
 `;
 
@@ -191,14 +145,15 @@ Analisis pesan dengan teliti dan berikan JSON yang valid. Pastikan dueAtWIB sela
         { role: 'user', content: `Pesan: "${message}"` }
       ],
       temperature: 0.1,
-      max_tokens: 400
+      max_completion_tokens: 400,
+      response_format: { type: 'json_object' }
     });
 
     const content = completion.choices[0]?.message?.content?.trim();
     if (!content) throw new Error('Empty AI response');
 
     const parsed = JSON.parse(content);
-    
+
     // Enhanced validation dan enrichment
     const result = {
       intent: parsed.intent || 'unknown',
@@ -213,7 +168,7 @@ Analisis pesan dengan teliti dan berikan JSON yang valid. Pastikan dueAtWIB sela
       conversationalResponse: parsed.conversationalResponse || null
     };
 
-    // Fallback validation untuk dueAtWIB jika AI gagal
+    // Fallback validation untuk dueAtWIB jika AI gagal memberikan waktu namun intent create
     if (!result.dueAtWIB && result.intent === 'create') {
       result.dueAtWIB = fallbackTimeParser(message);
     }
@@ -221,29 +176,30 @@ Analisis pesan dengan teliti dan berikan JSON yang valid. Pastikan dueAtWIB sela
     return result;
   } catch (error) {
     console.error('[AI] Extract error:', error);
-    // Complete fallback parsing
+    // Complete fallback parsing tanpa bikin reminder ngawur
     return fallbackParser(message);
   }
 }
 
 /**
  * Fallback parser when AI fails - dengan support untuk conversational flow
+ * Direvisi: tidak pernah auto-create reminder dari pesan ringan tanpa sinyal waktu/konten.
  */
 function fallbackParser(message) {
   const nowWIB = DateTime.now().setZone(WIB_TZ);
   const text = message.toLowerCase();
-  
+
   // Check for cancel keyword pattern --reminder [keyword]
   const cancelKeywordMatch = text.match(/--reminder\s+(.+)/i);
   if (cancelKeywordMatch) {
-    return { 
-      intent: 'cancel_keyword', 
-      title: '', 
-      recipientUsernames: [], 
-      timeType: 'relative', 
-      dueAtWIB: null, 
-      repeat: 'none', 
-      repeatDetails: {}, 
+    return {
+      intent: 'cancel_keyword',
+      title: '',
+      recipientUsernames: [],
+      timeType: 'relative',
+      dueAtWIB: null,
+      repeat: 'none',
+      repeatDetails: {},
       cancelKeyword: cancelKeywordMatch[1].trim(),
       stopNumber: null,
       conversationalResponse: `Mencari pengingat terkait '${cancelKeywordMatch[1].trim()}'...`
@@ -253,69 +209,56 @@ function fallbackParser(message) {
   // Check for stop number pattern stop (1), stop (2), etc
   const stopNumberMatch = text.match(/stop\s*\((\d+)\)/i);
   if (stopNumberMatch) {
-    return { 
-      intent: 'stop_number', 
-      title: '', 
-      recipientUsernames: [], 
-      timeType: 'relative', 
-      dueAtWIB: null, 
-      repeat: 'none', 
-      repeatDetails: {}, 
-      cancelKeyword: null,
-      stopNumber: stopNumberMatch[1],
-      conversationalResponse: `Membatalkan reminder nomor ${stopNumberMatch[1]}...`
-    };
-  }
-  
-  // Check for other cancel intents
-  if (text.includes('stop') || text.includes('batal') || text.includes('cancel')) {
-    if (text.includes('semua') || text.includes('all')) {
-      return { intent: 'cancel_all', title: '', recipientUsernames: [], timeType: 'relative', dueAtWIB: null, repeat: 'none', repeatDetails: {}, cancelKeyword: null, stopNumber: null, conversationalResponse: null };
-    }
-    return { intent: 'cancel', title: '', recipientUsernames: [], timeType: 'relative', dueAtWIB: null, repeat: 'none', repeatDetails: {}, cancelKeyword: null, stopNumber: null, conversationalResponse: null };
-  }
-  
-  if (text.includes('list') || text.includes('tampilkan')) {
-    return { intent: 'list', title: '', recipientUsernames: [], timeType: 'relative', dueAtWIB: null, repeat: 'none', repeatDetails: {}, cancelKeyword: null, stopNumber: null, conversationalResponse: null };
-  }
-
-  // Potential reminder detection (natural language without explicit keywords)
-  const potentialKeywords = ['nanti', 'besok', 'jemput', 'meeting', 'minum obat', 'lupa', 'semoga', 'rapat', 'penting'];
-  const hasPotentialKeyword = potentialKeywords.some(keyword => text.includes(keyword));
-  const hasExplicitKeyword = text.includes('ingatkan') || text.includes('reminder') || text.includes('pengingat');
-  
-  if (hasPotentialKeyword && !hasExplicitKeyword) {
     return {
-      intent: 'potential_reminder',
-      title: extractTitleFromText(message),
-      recipientUsernames: extractUsernames(message),
+      intent: 'stop_number',
+      title: '',
+      recipientUsernames: [],
       timeType: 'relative',
       dueAtWIB: null,
       repeat: 'none',
       repeatDetails: {},
       cancelKeyword: null,
-      stopNumber: null,
-      conversationalResponse: "Mau aku bantu bikin pengingat untuk itu? 😊 Kalau iya, kamu mau diingatkan jam berapa?"
+      stopNumber: stopNumberMatch[1],
+      conversationalResponse: `Membatalkan reminder nomor ${stopNumberMatch[1]}...`
     };
   }
+
+  // Check for other cancel intents
+  if (/\b(stop|batal|cancel)\b/i.test(text)) {
+    if (/\b(semua|all)\b/i.test(text)) {
+      return { intent: 'cancel_all', title: '', recipientUsernames: [], timeType: 'relative', dueAtWIB: null, repeat: 'none', repeatDetails: {}, cancelKeyword: null, stopNumber: null, conversationalResponse: null };
+    }
+    return { intent: 'cancel', title: '', recipientUsernames: [], timeType: 'relative', dueAtWIB: null, repeat: 'none', repeatDetails: {}, cancelKeyword: null, stopNumber: null, conversationalResponse: null };
+  }
+
+  if (/\b(list|tampilkan)\b/i.test(text)) {
+    return { intent: 'list', title: '', recipientUsernames: [], timeType: 'relative', dueAtWIB: null, repeat: 'none', repeatDetails: {}, cancelKeyword: null, stopNumber: null, conversationalResponse: null };
+  }
+
+  // Potential reminder detection (tanpa kata eksplisit)
+  const potentialKeywords = ['nanti', 'besok', 'jemput', 'meeting', 'minum obat', 'lupa', 'semoga', 'rapat', 'penting'];
+  const hasPotentialKeyword = potentialKeywords.some(k => text.includes(k));
+  const hasExplicitKeyword = /\b(ingatkan|reminder|pengingat)\b/i.test(text);
 
   // Parse time - relative patterns
   let dueAtWIB = null;
   let repeat = 'none';
   let timeType = 'relative';
-  let repeatDetails = {};
+  const repeatDetails = {};
 
-  // Relative time patterns
   const minuteMatch = text.match(/(\d+)\s*menit/i);
-  const hourMatch = text.match(/(\d+)\s*jam/i);
+  const hourMatch = text.match(/(\d+)\s*jam\b/i);
   const secondMatch = text.match(/(\d+)\s*detik/i);
-  
+  const dayMatch = text.match(/(\d+)\s*hari/i);
+
   if (minuteMatch) {
-    dueAtWIB = nowWIB.plus({ minutes: parseInt(minuteMatch[1]) }).toISO();
+    dueAtWIB = nowWIB.plus({ minutes: parseInt(minuteMatch[1], 10) }).toISO();
   } else if (hourMatch) {
-    dueAtWIB = nowWIB.plus({ hours: parseInt(hourMatch[1]) }).toISO();
+    dueAtWIB = nowWIB.plus({ hours: parseInt(hourMatch[1], 10) }).toISO();
   } else if (secondMatch) {
-    dueAtWIB = nowWIB.plus({ seconds: parseInt(secondMatch[1]) }).toISO();
+    dueAtWIB = nowWIB.plus({ seconds: parseInt(secondMatch[1], 10) }).toISO();
+  } else if (dayMatch) {
+    dueAtWIB = nowWIB.plus({ days: parseInt(dayMatch[1], 10) }).toISO();
   } else if (text.includes('besok')) {
     timeType = 'absolute';
     dueAtWIB = nowWIB.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0 }).toISO();
@@ -331,10 +274,12 @@ function fallbackParser(message) {
       repeat = 'hourly';
     } else if (text.includes('hari')) {
       repeat = 'daily';
-      const timeMatch = text.match(/jam\s*(\d{1,2})/i);
+      const timeMatch = text.match(/jam\s*(\d{1,2})(?:[:.](\d{2}))?/i);
       if (timeMatch) {
-        repeatDetails.timeOfDay = timeMatch[1].padStart(2, '0') + ':00';
-        dueAtWIB = nowWIB.plus({ days: 1 }).set({ hour: parseInt(timeMatch[1]), minute: 0, second: 0 }).toISO();
+        const hh = timeMatch[1].padStart(2, '0');
+        const mm = timeMatch[2] ? timeMatch[2].padStart(2, '0') : '00';
+        repeatDetails.timeOfDay = `${hh}:${mm}`;
+        dueAtWIB = nowWIB.plus({ days: 1 }).set({ hour: parseInt(hh, 10), minute: parseInt(mm, 10), second: 0 }).toISO();
       }
     } else if (text.includes('minggu')) {
       repeat = 'weekly';
@@ -343,59 +288,85 @@ function fallbackParser(message) {
     }
   }
 
-  // Check if we have content but no time (need_time) or time but no content (need_content)
-  const hasReminderKeyword = text.includes('ingatkan') || text.includes('reminder') || text.includes('pengingat');
+  // Signal waktu/konten
+  const hasAnyTimeSignal =
+    minuteMatch || hourMatch || secondMatch || dayMatch ||
+    text.includes('besok') || text.includes('lusa') ||
+    /jam\s*\d{1,2}/i.test(text);
+
   const title = extractTitleFromText(message);
-  const hasTimeInfo = minuteMatch || hourMatch || secondMatch || text.includes('besok') || text.includes('lusa') || text.includes('jam');
   const hasContentInfo = title && title !== 'Reminder' && title.length > 0;
 
-  if (hasReminderKeyword) {
-    if (hasContentInfo && !hasTimeInfo) {
-      return {
-        intent: 'need_time',
-        title: title,
-        recipientUsernames: extractUsernames(message),
-        timeType: 'relative',
-        dueAtWIB: null,
-        repeat: 'none',
-        repeatDetails: {},
-        cancelKeyword: null,
-        stopNumber: null,
-        conversationalResponse: `Siap! Untuk '${title}', kamu mau diingatkan kapan?`
-      };
-    } else if (hasTimeInfo && !hasContentInfo) {
-      let dueAtWIB = null;
-      if (minuteMatch) {
-        dueAtWIB = nowWIB.plus({ minutes: parseInt(minuteMatch[1]) }).toISO();
-      } else if (hourMatch) {
-        dueAtWIB = nowWIB.plus({ hours: parseInt(hourMatch[1]) }).toISO();
-      } else if (text.includes('besok')) {
-        dueAtWIB = nowWIB.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0 }).toISO();
-      }
-      
-      return {
-        intent: 'need_content',
-        title: '',
-        recipientUsernames: extractUsernames(message),
-        timeType: hasTimeInfo ? 'absolute' : 'relative',
-        dueAtWIB: dueAtWIB,
-        repeat: 'none',
-        repeatDetails: {},
-        cancelKeyword: null,
-        stopNumber: null,
-        conversationalResponse: "Noted jamnya! Kamu mau diingatkan tentang apa ya?"
-      };
-    }
+  // Jika tidak ada sinyal waktu & tidak ada kata eksplisit → jangan create
+  if (!hasAnyTimeSignal && !hasExplicitKeyword) {
+    return {
+      intent: hasPotentialKeyword ? 'potential_reminder' : 'unknown',
+      title,
+      recipientUsernames: extractUsernames(message),
+      timeType: 'relative',
+      dueAtWIB: null,
+      repeat: 'none',
+      repeatDetails: {},
+      cancelKeyword: null,
+      stopNumber: null,
+      conversationalResponse: hasPotentialKeyword
+        ? "Mau aku bantu bikin pengingat untuk itu? 😊 Kalau iya, kamu mau diingatkan jam berapa?"
+        : "Halo! Ada yang mau kamu jadikan pengingat? 😊"
+    };
   }
 
-  // Default fallback
+  // Jika user ingin diingatkan (eksplisit) tapi waktu belum jelas → need_time
+  if (hasExplicitKeyword && hasContentInfo && !hasAnyTimeSignal) {
+    return {
+      intent: 'need_time',
+      title,
+      recipientUsernames: extractUsernames(message),
+      timeType: 'relative',
+      dueAtWIB: null,
+      repeat: 'none',
+      repeatDetails: {},
+      cancelKeyword: null,
+      stopNumber: null,
+      conversationalResponse: `Siap! Untuk '${title}', kamu mau diingatkan kapan?`
+    };
+  }
+
+  // Jika waktu ada tapi konten belum jelas → need_content
+  if (hasAnyTimeSignal && !hasContentInfo) {
+    return {
+      intent: 'need_content',
+      title: '',
+      recipientUsernames: extractUsernames(message),
+      timeType: timeType,
+      dueAtWIB: dueAtWIB,
+      repeat,
+      repeatDetails,
+      cancelKeyword: null,
+      stopNumber: null,
+      conversationalResponse: "Noted jamnya! Kamu mau diingatkan tentang apa ya?"
+    };
+  }
+
+  // Hanya create jika ada sinyal yang cukup
   if (!dueAtWIB) {
-    dueAtWIB = nowWIB.plus({ minutes: 5 }).toISO();
+    // kalau jam belum jelas, jangan create—balik ke need_time
+    return {
+      intent: 'need_time',
+      title,
+      recipientUsernames: extractUsernames(message),
+      timeType: 'relative',
+      dueAtWIB: null,
+      repeat: 'none',
+      repeatDetails: {},
+      cancelKeyword: null,
+      stopNumber: null,
+      conversationalResponse: `Siap! Untuk '${title}', kamu mau diingatkan kapan?`
+    };
   }
 
   return {
     intent: 'create',
-    title: extractTitleFromText(message),
+    title,
     recipientUsernames: extractUsernames(message),
     timeType,
     dueAtWIB,
@@ -413,30 +384,30 @@ function fallbackParser(message) {
 function fallbackTimeParser(message) {
   const nowWIB = DateTime.now().setZone(WIB_TZ);
   const text = message.toLowerCase();
-  
+
   // Try relative time first
   const patterns = [
     { regex: /(\d+)\s*menit/i, unit: 'minutes' },
-    { regex: /(\d+)\s*jam/i, unit: 'hours' },
+    { regex: /(\d+)\s*jam\b/i, unit: 'hours' },
     { regex: /(\d+)\s*detik/i, unit: 'seconds' },
     { regex: /(\d+)\s*hari/i, unit: 'days' }
   ];
-  
+
   for (const pattern of patterns) {
     const match = text.match(pattern.regex);
     if (match) {
-      const value = parseInt(match[1]);
+      const value = parseInt(match[1], 10);
       return nowWIB.plus({ [pattern.unit]: value }).toISO();
     }
   }
-  
+
   // Try absolute time
   if (text.includes('besok')) {
     return nowWIB.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0 }).toISO();
   }
-  
-  // Default: 5 minutes from now
-  return nowWIB.plus({ minutes: 5 }).toISO();
+
+  // Tidak memaksakan jadwal kalau tidak jelas
+  return null;
 }
 
 /**
@@ -453,7 +424,7 @@ function extractUsernames(message) {
  */
 function extractTitleFromText(text) {
   const t = text.toLowerCase();
-  
+
   // Remove common words
   const cleaned = t
     .replace(/\b(tolong|mohon|bisa|minta|please|ingetin|ingatkan|reminder|pengingat|setiap|every)\b/gi, '')
@@ -466,7 +437,6 @@ function extractTitleFromText(text) {
 
   const words = cleaned.split(' ').filter(w => w.length > 2);
   const title = words.slice(0, 3).join(' ');
-  
   return title || 'Reminder';
 }
 
@@ -474,7 +444,7 @@ function extractTitleFromText(text) {
  * Generate AI reply untuk konfirmasi atau reminder dengan tone hangat dan personal
  */
 async function generateReply(type, context = {}) {
-  const systemMsg = type === 'confirm' 
+  const systemMsg = type === 'confirm'
     ? `Kamu asisten WhatsApp yang ramah dan personal seperti teman dekat. Buat konfirmasi pembuatan reminder yang hangat dan natural dalam bahasa Indonesia. 
 
 GAYA BAHASA:
@@ -490,7 +460,7 @@ STRUKTUR KONFIRMASI:
 CONTOH:
 - ✅ Siap! Aku akan ingatkan kamu untuk 'Minum Obat' 1 menit dari sekarang 😊
 - ✅ Noted! Reminder akan dikirim 15 menit dari sekarang ✨
-- ✅ Reminder dijadwalkan besok jam 14.00 �`
+- ✅ Reminder dijadwalkan besok jam 14.00 😊`
     : `Kamu asisten WhatsApp yang ramah dan komunikatif seperti teman yang mengingatkan dengan hangat. Buat pesan reminder yang natural dan personal dalam bahasa Indonesia.
 
 GAYA BAHASA:
@@ -504,8 +474,8 @@ STRUKTUR REMINDER:
 Halo [nama/kamu], ini pengingatmu untuk '[title]'. [motivasi ringan] [emoji]
 
 CONTOH:
-- Halo Vibbyfs, ini pengingatmu untuk 'Jemput John'. Semoga harimu makin teratur dan tenang ��✨
-- Halo kamu, waktunya 'Minum Obat' nih! Jangan lupa jaga kesehatan ya �😊
+- Halo Vibbyfs, ini pengingatmu untuk 'Jemput John'. Semoga harimu makin teratur dan tenang 😊✨
+- Halo kamu, waktunya 'Minum Obat' nih! Jangan lupa jaga kesehatan ya 😊
 - Ini pengingatmu untuk 'Meeting'. Semoga berjalan lancar ya ✨🙏`;
 
   try {
@@ -516,27 +486,24 @@ CONTOH:
         { role: 'user', content: JSON.stringify(context) }
       ],
       temperature: 0.8,
-      max_tokens: 150
+      max_completion_tokens: 150
     });
 
     const aiResponse = completion.choices[0]?.message?.content?.trim();
-    
+
     if (aiResponse && aiResponse.length > 10) {
       return aiResponse;
     }
-    
-    // Fallback dengan template yang lebih personal dan hangat
+
+    // Fallback dengan template
     if (type === 'confirm') {
       const name = context.userName || context.recipients || 'kamu';
-      const timeInfo = context.timeType === 'relative' 
-        ? `${context.relativeTime}` 
+      const timeInfo = context.timeType === 'relative'
+        ? `${context.relativeTime}`
         : `pada ${context.dueTime}`;
-      
       return `✅ Siap, ${name}! Aku akan ingatkan kamu untuk '${context.title}' ${timeInfo}. ${getMotivationalMessage(context.title)} 😊`;
     } else {
       const name = context.userName || 'kamu';
-      
-      // Jika reminder untuk teman, SELALU sertakan identitas pengirim
       if (context.isForFriend) {
         const senderName = context.senderName || context.senderUsername || 'temanmu';
         return `Halo ${name}! Ada reminder dari ${senderName}: ini pengingatmu untuk '${context.title}'. ${getMotivationalMessage(context.title)} ✨🙏`;
@@ -546,15 +513,13 @@ CONTOH:
     }
   } catch (error) {
     console.error('[AI] Generate reply error:', error);
-    
+
     // Enhanced fallback
     if (type === 'confirm') {
       const name = context.userName || context.recipients || 'kamu';
       return `✅ Siap, ${name}! Pengingat '${context.title}' sudah dijadwalkan. Aku akan ingetin kamu tepat waktu! 😊`;
     } else {
       const name = context.userName || 'kamu';
-      
-      // Enhanced fallback untuk reminder ke teman - SELALU sertakan pengirim
       if (context.isForFriend) {
         const senderName = context.senderName || context.senderUsername || 'temanmu';
         return `Halo ${name}! Ada reminder dari ${senderName}: ini pengingatmu untuk '${context.title}'. ${getMotivationalMessage(context.title)} ✨🙏`;
@@ -575,37 +540,26 @@ function generateConversationalResponse(intent, context = {}) {
   switch (intent) {
     case 'potential_reminder':
       return "Mau aku bantu bikin pengingat untuk itu? 😊 Kalau iya, kamu mau diingatkan jam berapa?";
-    
     case 'need_time':
       return `Siap! Untuk '${title}', kamu mau diingatkan kapan?`;
-    
     case 'need_content':
       return "Noted jamnya! Kamu mau diingatkan tentang apa ya?";
-    
     case 'create':
       return `✅ Siap, ${name}! Aku akan ingatkan kamu untuk '${title}' ${timeInfo}. 😊`;
-    
     case 'cancel_keyword':
       return `Untuk membatalkan reminder, kirim pesan seperti ini: \`--reminder ${cancelKeyword}\`\nNanti aku tampilkan daftar pengingat aktif yang cocok.`;
-    
     case 'time_ambiguous':
       return "Maksudnya 'nanti' itu jam berapa ya? Biar aku bisa pasin pengingatnya 😊";
-    
     case 'time_passed':
       return "Waktunya udah lewat nih 😅 Mau dijadwalkan ulang?";
-    
     case 'user_cancelled':
       return "Oke, pengingatnya aku batalin ya. Kalau butuh lagi tinggal bilang aja 😊";
-    
     case 'stop_success':
       return `✅ Reminder nomor ${stopNumber} sudah dibatalkan. Kalau kamu butuh pengingat baru, tinggal bilang aja ya 😊`;
-    
     case 'stop_invalid':
       return "Nomor yang kamu kirim belum cocok nih 😅 Coba cek lagi daftar reminder-nya ya.";
-    
     case 'missing_time':
       return "Aku belum dapat jamnya nih. Kamu mau diingatkan jam berapa?";
-    
     default:
       return "Maaf, aku belum paham maksudmu. Bisa dijelaskan lagi? 😊";
   }
@@ -631,9 +585,9 @@ function generateReminderList(reminders, keyword) {
     });
     response += `${index + 1}. ${reminder.title} - ${time}\n`;
   });
-  
+
   response += `\nKirim pesan: \`stop (1)\` untuk membatalkan pengingat nomor 1, dan seterusnya.`;
-  
+
   return response;
 }
 
@@ -641,8 +595,8 @@ function generateReminderList(reminders, keyword) {
  * Enhanced motivational message dengan edge case handling
  */
 function getMotivationalMessage(title) {
-  const lowerTitle = title.toLowerCase();
-  
+  const lowerTitle = (title || '').toLowerCase();
+
   // Coffee/drink related
   if (lowerTitle.includes('kopi') || lowerTitle.includes('coffee')) {
     const coffeeMessages = [
@@ -653,18 +607,18 @@ function getMotivationalMessage(title) {
     ];
     return coffeeMessages[Math.floor(Math.random() * coffeeMessages.length)];
   }
-  
+
   // Exercise/workout related
   if (lowerTitle.includes('olahraga') || lowerTitle.includes('gym') || lowerTitle.includes('workout') || lowerTitle.includes('lari')) {
     const exerciseMessages = [
       'Semangat jaga kesehatan! 💪🌅',
       'Tubuh sehat, pikiran fresh! 💪😊',
-      'Let\'s go, jangan sampai skip! 💪🔥',
+      "Let's go, jangan sampai skip! 💪🔥",
       'Sehat itu investasi terbaik! 💪✨'
     ];
     return exerciseMessages[Math.floor(Math.random() * exerciseMessages.length)];
   }
-  
+
   // Meeting/work related
   if (lowerTitle.includes('meeting') || lowerTitle.includes('rapat') || lowerTitle.includes('kerja')) {
     const workMessages = [
@@ -675,7 +629,7 @@ function getMotivationalMessage(title) {
     ];
     return workMessages[Math.floor(Math.random() * workMessages.length)];
   }
-  
+
   // Work departure/home related
   if (lowerTitle.includes('pulang') || lowerTitle.includes('pergi') || lowerTitle.includes('berangkat')) {
     const departureMessages = [
@@ -688,18 +642,18 @@ function getMotivationalMessage(title) {
     ];
     return departureMessages[Math.floor(Math.random() * departureMessages.length)];
   }
-  
+
   // Food/meal related
   if (lowerTitle.includes('makan') || lowerTitle.includes('sarapan') || lowerTitle.includes('minum') || lowerTitle.includes('beli')) {
     const foodMessages = [
       'Jangan sampai lupa ya, tubuh butuh nutrisi! 🍽️😊',
       'Saatnya isi perut biar energi tetap full! 🍽️⚡',
       'Makan yang sehat ya! 🥗✨',
-      'Jangan skip meal, kesehatan nomor satu! 🍽️�'
+      'Jangan skip meal, kesehatan nomor satu! 🍽️😊'
     ];
     return foodMessages[Math.floor(Math.random() * foodMessages.length)];
   }
-  
+
   // Rest/break related
   if (lowerTitle.includes('istirahat') || lowerTitle.includes('tidur') || lowerTitle.includes('break')) {
     const restMessages = [
@@ -710,23 +664,22 @@ function getMotivationalMessage(title) {
     ];
     return restMessages[Math.floor(Math.random() * restMessages.length)];
   }
-  
-  // Default motivational messages
+
+  // Default
   const defaultMessages = [
     'Semangat menjalani hari! 🌟😊',
     'Kamu pasti bisa! 💪✨',
     'Jangan lupa ya! 😊🎯',
     'Keep going, you got this! 🚀💫',
     'Ayo kita lakukan dengan semangat! 🔥😄'
-  ];
-  
+    ];
   return defaultMessages[Math.floor(Math.random() * defaultMessages.length)];
 }
 
-module.exports = { 
-  extract, 
-  generateReply, 
-  extractTitleFromText, 
-  generateConversationalResponse, 
-  generateReminderList 
+module.exports = {
+  extract,
+  generateReply,
+  extractTitleFromText,
+  generateConversationalResponse,
+  generateReminderList
 };
