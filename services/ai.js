@@ -1,60 +1,84 @@
+// services/ai.js
 import OpenAI from "openai";
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
-});
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 /**
- * Proses teks dari user → kembalikan respon AI + instruksi reminder bila ada
- * @param {string} text - Input dari user
- * @param {object} user - Data user (misalnya {id, username, phone})
- * @returns {object} { reply, reminder }
+ * Ekstrak struktur reminder dari teks user.
+ * Output selalu JSON: { activity: string, time: string, intent: "create"|"need_time"|"need_content"|"unknown" }
+ * - Jangan pernah mengarang activity. Jika user hanya kirim waktu, activity = "".
+ * - Jika hanya activity tanpa waktu → intent = "need_time".
+ * - Jika hanya waktu tanpa activity → intent = "need_content".
+ * - Jika lengkap → intent = "create".
  */
-export async function processMessage(text, user = {}) {
+export async function extractReminderData(text) {
   try {
-    const prompt = `
-Kamu adalah asisten ramah untuk WhatsApp.
-Tugas:
-1. Jika user hanya menyapa → balas hangat & arahkan contoh "ingatkan saya <aktivitas> <waktu>".
-2. Jika user minta pengingat → ekstrak "aktivitas" dan "waktu".
-   - Aktivitas: deskripsi singkat apa yang harus diingatkan.
-   - Waktu: bisa format jam (20:00), besok, atau relatif (10 menit lagi).
-3. Jawab dengan bahasa alami, pendek & tidak kaku.
-4. Tutup jawaban dengan 1 kalimat motivasi singkat (tidak lebih dari 1 baris).
-Output JSON:
+    const sys = `
+Kamu mengekstrak pengingat dalam Bahasa Indonesia.
+Balas SELALU sebagai JSON saja (tanpa teks lain) dengan schema:
 {
-  "reply": "<balasan ke user>",
-  "reminder": {
-    "activity": "<aktivitas atau kosong>",
-    "time": "<waktu atau kosong>"
-  }
+  "activity": string,  // "" bila tidak ada
+  "time": string,      // "" bila tidak ada (contoh valid: "20:00", "besok 08:00", "1 menit lagi")
+  "intent": "create" | "need_time" | "need_content" | "unknown"
 }
+ATURAN:
+- Jangan mengarang "activity". Jika pesan hanya menyebut waktu (mis. "1 menit lagi"), kembalikan activity: "" dan intent: "need_content".
+- Jika ada aktivitas tapi tidak ada waktu → intent: "need_time".
+- Jika keduanya ada → intent: "create".
+- Jika ambigu → intent: "unknown".
 `;
 
-    const response = await client.chat.completions.create({
-      model: "gpt-5-mini", // ✅ ganti model ke gpt-5-mini
+    const resp = await client.chat.completions.create({
+      model: "gpt-5-mini",
       messages: [
-        { role: "system", content: prompt },
-        { role: "user", content: text },
+        { role: "system", content: sys },
+        { role: "user", content: text }
       ],
-      max_tokens: 250,
+      response_format: { type: "json_object" },
+      max_completion_tokens: 200
     });
 
-    const raw = response.choices[0]?.message?.content || "{}";
-    let data;
+    const raw = resp.choices?.[0]?.message?.content?.trim() || "";
+    if (!raw) return { activity: "", time: "", intent: "unknown" };
+
+    let parsed;
     try {
-      data = JSON.parse(raw);
+      parsed = JSON.parse(raw);
     } catch {
-      console.error("[AI] Gagal parse JSON:", raw);
-      data = { reply: "Maaf, coba ulangi lagi ya 😊", reminder: null };
+      return { activity: "", time: "", intent: "unknown" };
     }
 
-    return data;
-  } catch (err) {
-    console.error("[AI] Error:", err.message);
     return {
-      reply: "Maaf, aku lagi ada kendala. Coba sebentar lagi ya 🙏",
-      reminder: null,
+      activity: typeof parsed.activity === "string" ? parsed.activity.trim() : "",
+      time: typeof parsed.time === "string" ? parsed.time.trim() : "",
+      intent: ["create", "need_time", "need_content", "unknown"].includes(parsed.intent) ? parsed.intent : "unknown"
     };
+  } catch (e) {
+    console.error("[AI] extractReminderData error:", e?.message || e);
+    return { activity: "", time: "", intent: "unknown" };
+  }
+}
+
+/**
+ * Balasan natural & ramah. Tambahkan penutup motivasional singkat, MAKS 1 kalimat (≤ 1 baris).
+ */
+export async function generateAIResponse(messages) {
+  try {
+    const sys = `Kamu asisten WhatsApp yang ramah (Bahasa Indonesia).
+- Jawab natural, tidak kaku.
+- Jika user belum menyebut waktu, tanyakan dengan contoh (mis. "jam 20.00", "1 jam lagi", "besok 08.00").
+- Tutup jawaban dengan penutup motivasional singkat, hanya 1 kalimat pendek (maksimal 1 baris).`;
+
+    const resp = await client.chat.completions.create({
+      model: "gpt-5-mini",
+      messages: [{ role: "system", content: sys }, ...messages],
+      max_completion_tokens: 220
+    });
+
+    const content = resp.choices?.[0]?.message?.content?.trim();
+    return content || "Maaf, bisa dijelaskan lagi ya? 🙂";
+  } catch (e) {
+    console.error("[AI] generateAIResponse error:", e?.message || e);
+    return "Maaf, aku lagi ada kendala. Coba lagi sebentar ya 🙏";
   }
 }
