@@ -35,11 +35,55 @@ async function sendResponse(res, message, isTwilioWebhook = false, userPhone = n
 }
 
 /**
- * Polite fallback if AI response is missing
+ * Conversational fallback yang lebih manusiawi & mengarahkan
  */
-function politeFallback(ai, _text) {
-  if (ai && ai.conversationalResponse) return ai.conversationalResponse;
-  return 'Siap bantu! Kamu mau diingatkan tentang apa, dan kapan? 😊';
+function humanizeTimeWIB(iso) {
+  if (!iso) return null;
+  const dt = DateTime.fromISO(iso, { zone: WIB_TZ });
+  if (!dt.isValid) return null;
+  const now = DateTime.now().setZone(WIB_TZ);
+  const isToday = dt.hasSame(now, 'day');
+  const isTomorrow = dt.hasSame(now.plus({ days: 1 }), 'day');
+  if (isToday) return `hari ini jam ${dt.toFormat('HH:mm')} WIB`;
+  if (isTomorrow) return `besok jam ${dt.toFormat('HH:mm')} WIB`;
+  return dt.toFormat('dd/MM/yyyy HH:mm') + ' WIB';
+}
+
+function politeFallback(ai, rawText) {
+  const title = (ai?.title || '').trim() || extractTitleFromText(rawText) || 'pengingatmu';
+  const timeStr = humanizeTimeWIB(ai?.dueAtWIB);
+
+  // Balasan yang jelas, hangat, dan mengarahkan user ke langkah berikutnya
+  switch (ai?.intent) {
+    case 'need_time':
+      return `Baik, aku bantu buat pengingat *${title}*. Jam berapa enaknya? 😊\n` +
+             `Contoh: *"jam 20.00"*, *"30 menit lagi"*, atau *"besok jam 9"*.`;
+
+    case 'need_content':
+      if (timeStr) {
+        return `Siap, aku catat untuk ${timeStr}. Pengingatnya mau tentang apa ya? 😊\n` +
+               `Contoh: *"makan malam"*, *"minum obat"*, atau *"jemput anak"*.`;
+      }
+      return `Siap, jamnya sudah oke. Kamu mau diingatkan tentang apa ya? 😊`;
+
+    case 'potential_reminder':
+      // Jika AI mendeteksi sinyal tapi belum yakin, arahkan dengan jelas
+      return `Sepertinya kamu ingin bikin pengingat *${title}*. Mau kujadwalkan? Jam berapa bagusnya? 😊\n` +
+             `Contoh: *"jam 20.00"*, *"1 jam lagi"*, *"besok jam 9"*.`;
+
+    case 'unknown':
+      return `Hai! Aku bisa bantu bikin pengingat biar nggak lupa. 😊\n` +
+             `Cukup tulis: *"ingatkan saya <aktivitas> <waktu>"*.\n` +
+             `Contoh: *"ingatkan saya makan malam jam 20.00"* atau *"ingatkan saya minum obat 30 menit lagi"*.`;
+
+    default:
+      // create/cancel/list dll tanpa conversationalResponse dari AI
+      if (!ai?.intent || ai.intent === 'create') {
+        // Jarang terjadi di fallback, aman-kan:
+        return `Sip! Pengingat *${title}* akan aku bantu atur. Kamu ingin diingatkan kapan ya? 😊`;
+      }
+      return 'Siap bantu! Kamu mau diingatkan tentang apa, dan kapan? 😊';
+  }
 }
 
 /**
