@@ -1,99 +1,70 @@
 // services/ai.js
+// Model: gpt-5-mini (tanpa temperature), gunakan max_completion_tokens
+// Fitur: retry 1x bila kosong, deteksi "time-only", cegah title seperti "lagi"
+
 const { DateTime } = require('luxon');
 const OpenAI = require('openai');
 
 const WIB_TZ = 'Asia/Jakarta';
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
-
-/**
- * Enhanced AI service untuk reminder dengan parsing waktu yang fleksibel:
- * 1. Relative time
- * 2. Absolute time
- * 3. Recurring time
- */
+/** =========================
+ *  EXTRACT (INTENT PARSER)
+ *  ========================= */
 async function extract(message) {
   const nowWIB = DateTime.now().setZone(WIB_TZ);
 
+  // 0) HARD GUARD: pesan waktu saja (tanpa aktivitas) → langsung need_content
+  const timeOnly = detectTimeOnly(message);
+  if (timeOnly) {
+    return {
+      intent: 'need_content',
+      title: '',
+      recipientUsernames: extractUsernames(message),
+      timeType: timeOnly.timeType,
+      dueAtWIB: timeOnly.dueAtWIB,
+      repeat: 'none',
+      repeatDetails: {},
+      cancelKeyword: null,
+      stopNumber: null,
+      conversationalResponse:
+        "Siap, jamnya aku catat. Pengingatnya tentang apa ya? 😊 Contoh: 'beli kopi nescafe', 'makan malam', 'minum obat'."
+    };
+  }
+
   const systemMsg = `
-Kamu adalah asisten WhatsApp yang hangat, natural, dan proaktif. Kamu ahli mendeteksi niat pembuatan reminder bahkan tanpa kata "ingatkan"/"reminder".
+Kamu adalah asisten WhatsApp yang hangat, natural, dan proaktif.
 
 CURRENT TIME: ${nowWIB.toFormat('yyyy-MM-dd HH:mm:ss')} WIB (${WIB_TZ})
 
-TUGAS: Analisis pesan dan keluarkan JSON valid **SAJA** (tanpa teks lain) dengan struktur:
+KELUARKAN **JSON VALID SAJA** (tanpa teks lain) dg struktur:
 {
   "intent": "create/potential_reminder/need_time/need_content/cancel/list/stop_number/cancel_keyword/cancel_all/unknown",
-  "title": "judul singkat aktivitas (≤5 kata, tanpa 'pengingat'/'reminder'/'setiap')",
-  "recipientUsernames": ["@username jika ada"],
+  "title": "≤5 kata, tanpa 'pengingat/reminder/setiap'",
+  "recipientUsernames": ["@username"],
   "timeType": "relative/absolute/recurring",
-  "dueAtWIB": "ISO time zona ${WIB_TZ} atau null",
+  "dueAtWIB": "ISO ${WIB_TZ} atau null",
   "repeat": "none/hourly/daily/weekly/monthly",
-  "repeatDetails": {
-    "dayOfWeek": "senin/selasa/rabu/kamis/jumat/sabtu/minggu atau null",
-    "timeOfDay": "HH:mm atau null",
-    "dayOfMonth": "1-31 atau null"
-  },
-  "cancelKeyword": "string atau null",
-  "stopNumber": "string atau null",
-  "conversationalResponse": "respon hangat & deskriptif untuk langkah selanjutnya"
+  "repeatDetails": {"dayOfWeek": "...", "timeOfDay":"HH:mm","dayOfMonth":"1-31"},
+  "cancelKeyword": null,
+  "stopNumber": null,
+  "conversationalResponse": "respon hangat yang mengarahkan user dg contoh"
 }
 
-ATURAN INTENT & CONVERSATIONAL RESPONSE (HUMAN FRIENDLY):
-- potential_reminder → "Sepertinya kamu ingin bikin pengingat [title]. Mau kujadwalkan? Jam berapa enaknya? 😊 Contoh: 'jam 20.00', '30 menit lagi', 'besok jam 9'."
-- need_time (ada title, belum ada waktu) → "Baik, aku buat pengingat [title]. Jam berapa enaknya? 😊 Misal: 'jam 20.00', '1 jam lagi', 'besok jam 9'."
-- need_content (ada waktu, belum ada title) → "Siap, jamnya aku catat. Pengingatnya tentang apa ya? 😊 Contoh: 'makan malam', 'minum obat', 'jemput anak'."
-- create (lengkap) → "✅ Siap! Aku jadwalkan '[title]' [waktu natural]."
-- unknown → "Aku bisa bantu bikin pengingat. Tulis: 'ingatkan saya <aktivitas> <waktu>'. Contoh: 'ingatkan saya makan malam jam 20.00' 😊"
-
-ATURAN WAKTU:
-- RELATIVE:
-  - "5 menit/jam/detik lagi" → now + delta
-  - "besok" → besok 09:00 WIB
-  - "lusa" → lusa 09:00 WIB
-- ABSOLUTE:
-  - "jam 14:00" → hari ini 14:00 WIB
-  - "pukul 2 siang" → 14:00 WIB
-  - "besok jam 8" → besok 08:00 WIB
-  - "Senin jam 10" → Monday 10:00 WIB berikutnya
-  - "tanggal 15 jam 16:30" → tanggal 15 bulan ini 16:30 WIB
-- RECURRING:
-  - "setiap hari jam 8" → repeat: "daily", timeOfDay: "08:00"
-  - "setiap Senin jam 9" → repeat: "weekly", dayOfWeek: "senin", timeOfDay: "09:00"
-  - "setiap tanggal 1 jam 10" → repeat: "monthly", dayOfMonth: "1", timeOfDay: "10:00"
-  - "setiap jam" → repeat: "hourly"
-
-PARSING TITLE:
-- Ambil aktivitas utama, hilangkan kata "pengingat/reminder/setiap/ingatkan/ingetin" dan pronoun.
-
-PARSING USERNAME:
-- Ekstrak semua @username. Jika ada, set repeat = "none".
-
-PARSING CANCEL:
-- "--reminder <keyword>" → cancel_keyword
-- "stop (angka)" → stop_number
-- "stop/batal semua" → cancel_all
-- "stop/batal/cancel reminder" → cancel
+ATURAN PENTING:
+- Jika user hanya memberi WAKTU (mis. "1 menit lagi", "jam 8", "besok jam 9"), JANGAN set 'create'. Set:
+  intent: "need_content", dueAtWIB terisi, title: "".
+- Jika ada AKTIVITAS tanpa waktu → intent: "need_time".
+- 'create' hanya bila ada aktivitas + waktu valid.
+- Jangan pernah mengisi title dengan kata waktu seperti "lagi", "nanti", "besok".
+- 'conversationalResponse' harus memberi contoh konkret (jam 20.00, 30 menit lagi, besok jam 9).
 `;
 
   try {
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-5-mini',
-      messages: [
-        { role: 'system', content: systemMsg },
-        { role: 'user', content: `Pesan: "${message}"` }
-      ],
-      // HAPUS temperature: gpt-5-mini hanya terima default (1)
-      max_completion_tokens: 400,
-      response_format: { type: 'json_object' }
-    });
-
-    const content = completion.choices[0]?.message?.content?.trim();
+    const content = await callOpenAIForJSON(systemMsg, `Pesan: "${message}"`, 400);
     if (!content) throw new Error('Empty AI response');
 
-    const parsed = JSON.parse(content);
-
+    const parsed = safeParseJSON(content) || {};
     const result = {
       intent: parsed.intent || 'unknown',
       title: parsed.title || 'Reminder',
@@ -107,15 +78,15 @@ PARSING CANCEL:
       conversationalResponse: parsed.conversationalResponse || null
     };
 
-    // Jika intent create tapi waktu kosong, coba fallback
-    if (!result.dueAtWIB && result.intent === 'create') {
-      result.dueAtWIB = fallbackTimeParser(message);
-      if (!result.dueAtWIB) {
-        // Jadikan need_time agar tidak salah jadwal
-        result.intent = 'need_time';
-        result.conversationalResponse = result.conversationalResponse ||
-          `Baik, aku buat pengingat '${result.title}'. Jam berapa enaknya? 😊 Misal: "jam 20.00", "30 menit lagi".`;
-      }
+    // Cegah title generik berbasis waktu (lagi/besok/dll)
+    if (isGenericTimeWord(result.title)) result.title = '';
+
+    // Kalau 'create' tapi dueAt kosong → turunkan ke need_time
+    if (result.intent === 'create' && !result.dueAtWIB) {
+      result.intent = 'need_time';
+      result.conversationalResponse =
+        result.conversationalResponse ||
+        `Baik, aku buat pengingat '${result.title || 'aktivitasmu'}'. Jam berapa enaknya? 😊 Misal: "jam 20.00", "30 menit lagi".`;
     }
 
     return result;
@@ -125,12 +96,39 @@ PARSING CANCEL:
   }
 }
 
-/**
- * Fallback parser (aman, tidak auto-create dari pesan ringan)
- */
+/** =========== OpenAI call dengan retry 1x (tanpa temperature & tanpa response_format) =========== */
+async function callOpenAIForJSON(systemMsg, userMsg, maxCompletionTokens = 400) {
+  const payload = {
+    model: 'gpt-5-mini',
+    messages: [
+      { role: 'system', content: systemMsg },
+      { role: 'user', content: userMsg }
+    ],
+    max_completion_tokens: maxCompletionTokens
+  };
+
+  // attempt 1
+  let res = await openai.chat.completions.create(payload).catch(() => null);
+  let text = res?.choices?.[0]?.message?.content?.trim();
+  if (text) return text;
+
+  // attempt 2 (instruksi lebih ketat)
+  const stricter = {
+    ...payload,
+    messages: [
+      { role: 'system', content: systemMsg + '\n\nWAJIB keluarkan JSON valid saja tanpa teks lain.' },
+      { role: 'user', content: userMsg }
+    ]
+  };
+  res = await openai.chat.completions.create(stricter).catch(() => null);
+  text = res?.choices?.[0]?.message?.content?.trim();
+  return text || null;
+}
+
+/** =========== Fallback Parser (aman) =========== */
 function fallbackParser(message) {
   const nowWIB = DateTime.now().setZone(WIB_TZ);
-  const text = message.toLowerCase();
+  const text = (message || '').toLowerCase();
 
   // --reminder <keyword>
   const cancelKeywordMatch = text.match(/--reminder\s+(.+)/i);
@@ -179,7 +177,7 @@ function fallbackParser(message) {
   }
 
   // Deteksi kemungkinan reminder
-  const potentialKeywords = ['nanti', 'besok', 'jemput', 'meeting', 'minum obat', 'lupa', 'semoga', 'rapat', 'penting'];
+  const potentialKeywords = ['nanti', 'besok', 'jemput', 'meeting', 'minum obat', 'lupa', 'semoga', 'rapat', 'penting', 'makan', 'beli', 'kopi'];
   const hasPotentialKeyword = potentialKeywords.some(k => text.includes(k));
   const hasExplicitKeyword = /\b(ingatkan|ingetin|reminder|pengingat)\b/i.test(text);
 
@@ -319,32 +317,27 @@ function fallbackParser(message) {
   };
 }
 
-/**
- * Enhanced fallback time parser
- */
+/** =========== Waktu: fallback ringan =========== */
 function fallbackTimeParser(message) {
   const nowWIB = DateTime.now().setZone(WIB_TZ);
-  const text = message.toLowerCase();
-
+  const text = (message || '').toLowerCase();
   const patterns = [
     { regex: /(\d+)\s*menit/i, unit: 'minutes' },
     { regex: /(\d+)\s*jam\b/i, unit: 'hours' },
     { regex: /(\d+)\s*detik/i, unit: 'seconds' },
     { regex: /(\d+)\s*hari/i, unit: 'days' }
   ];
-
   for (const p of patterns) {
     const m = text.match(p.regex);
     if (m) return nowWIB.plus({ [p.unit]: parseInt(m[1], 10) }).toISO();
   }
-
   if (text.includes('besok')) {
     return nowWIB.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0 }).toISO();
   }
-
-  return null; // jangan paksa
+  return null;
 }
 
+/** =========== Ekstraksi lain =========== */
 function extractUsernames(message) {
   const usernameRegex = /@(\w+)/g;
   const matches = message.match(usernameRegex);
@@ -352,10 +345,10 @@ function extractUsernames(message) {
 }
 
 function extractTitleFromText(text) {
-  const t = text.toLowerCase();
+  const t = (text || '').toLowerCase();
   const cleaned = t
     .replace(/\b(tolong|mohon|bisa|minta|please|ingetin|ingatkan|reminder|pengingat|setiap|every)\b/gi, '')
-    .replace(/\b(hari|jam|menit|bulan|minggu|daily|weekly|monthly|hourly)\b/gi, '')
+    .replace(/\b(hari|jam|menit|bulan|minggu|daily|weekly|monthly|hourly|besok|lusa|nanti|lagi|pukul)\b/gi, '')
     .replace(/\b(saya|aku|gue|gua|ane|i|me)\b/gi, '')
     .replace(/\d+/g, '')
     .replace(/[^\w\s]/g, ' ')
@@ -363,13 +356,11 @@ function extractTitleFromText(text) {
     .trim();
 
   const words = cleaned.split(' ').filter(w => w.length > 2);
-  const title = words.slice(0, 3).join(' ');
+  const title = words.slice(0, 5).join(' ');
   return title || 'Reminder';
 }
 
-/**
- * Generate AI reply (hapus temperature)
- */
+/** =========== Generate balasan =========== */
 async function generateReply(type, context = {}) {
   const systemMsg = type === 'confirm'
     ? `Kamu asisten WhatsApp yang ramah & personal. Buat konfirmasi reminder yang hangat (Bahasa Indonesia), ringkas, natural, dengan emoji kontekstual.`
@@ -419,6 +410,7 @@ async function generateReply(type, context = {}) {
   }
 }
 
+/** =========== Conversational builder opsional =========== */
 function generateConversationalResponse(intent, context = {}) {
   const { title, userName, cancelKeyword, stopNumber, timeInfo } = context;
   const name = userName || 'kamu';
@@ -450,6 +442,7 @@ function generateConversationalResponse(intent, context = {}) {
   }
 }
 
+/** =========== Reminder list =========== */
 function generateReminderList(reminders, keyword) {
   if (!reminders || reminders.length === 0) {
     return `Tidak ada pengingat aktif terkait '${keyword}'. Ketik 'list reminder' untuk semua ya 😊`;
@@ -470,14 +463,15 @@ function generateReminderList(reminders, keyword) {
   return response;
 }
 
+/** =========== Motivasi kontekstual =========== */
 function getMotivationalMessage(title) {
   const lower = (title || '').toLowerCase();
-  if (lower.includes('kopi') || lower.includes('coffee')) {
+  if (lower.includes('kopi') || lower.includes('nescafe') || lower.includes('coffee')) {
     const arr = [
-      'Jangan lupa nikmati aromanya! ☕✨',
-      'Kopi enak nggak nungguin, buruan! ☕😄',
-      'Secangkir kopi biar makin semangat! ☕🌟',
-      'Saatnya boost energi! ☕⚡'
+      'Saatnya seduh favoritmu! ☕✨',
+      'Kopi enak nggak nungguin—gas! ☕😄',
+      'Biar makin semangat dengan secangkir kopi! ☕🌟',
+      'Waktunya boost energi! ☕⚡'
     ];
     return arr[Math.floor(Math.random() * arr.length)];
   }
@@ -536,6 +530,60 @@ function getMotivationalMessage(title) {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+/** =========== Helpers khusus extract =========== */
+function detectTimeOnly(message) {
+  const nowWIB = DateTime.now().setZone(WIB_TZ);
+  const text = (message || '').toLowerCase();
+
+  const m = text.match(/(\d+)\s*menit/i);
+  const h = text.match(/(\d+)\s*jam\b/i);
+  const s = text.match(/(\d+)\s*detik/i);
+  const d = text.match(/(\d+)\s*hari/i);
+  const hhmm = text.match(/\bjam\s*(\d{1,2})(?:[:.](\d{2}))?\b/i);
+  const besok = text.includes('besok');
+  const lusa = text.includes('lusa');
+
+  // Jika ada indikasi aktivitas, bukan time-only
+  const activityHints = /(makan|minum|beli|jemput|meeting|rapat|obat|olahraga|kopi|nescafe)/i;
+  if (activityHints.test(text)) return null;
+
+  let dueAtWIB = null;
+  let timeType = 'relative';
+
+  if (m) dueAtWIB = nowWIB.plus({ minutes: parseInt(m[1], 10) }).toISO();
+  else if (h) dueAtWIB = nowWIB.plus({ hours: parseInt(h[1], 10) }).toISO();
+  else if (s) dueAtWIB = nowWIB.plus({ seconds: parseInt(s[1], 10) }).toISO();
+  else if (d) dueAtWIB = nowWIB.plus({ days: parseInt(d[1], 10) }).toISO();
+  else if (hhmm) {
+    const hh = parseInt(hhmm[1], 10);
+    const mm = hhmm[2] ? parseInt(hhmm[2], 10) : 0;
+    dueAtWIB = nowWIB.set({ hour: hh, minute: mm, second: 0 }).toISO();
+    timeType = 'absolute';
+  } else if (besok) {
+    dueAtWIB = nowWIB.plus({ days: 1 }).set({ hour: 9, minute: 0, second: 0 }).toISO();
+    timeType = 'absolute';
+  } else if (lusa) {
+    dueAtWIB = nowWIB.plus({ days: 2 }).set({ hour: 9, minute: 0, second: 0 }).toISO();
+    timeType = 'absolute';
+  }
+
+  if (!dueAtWIB) return null;
+  return { dueAtWIB, timeType };
+}
+
+function isGenericTimeWord(title) {
+  if (!title) return true;
+  const t = title.trim().toLowerCase();
+  const stop = new Set([
+    'lagi','nanti','besok','lusa','hari','jam','menit','detik','pukul','sekarang',
+    'week','minggu','bulan','hari ini','malam','siang','pagi'
+  ]);
+  if (stop.has(t)) return true;
+  if (/^\d+$/.test(t)) return true;   // angka doang
+  if (t.length <= 3) return true;     // 1-kata pendek generik
+  return false;
+}
+
 module.exports = {
   extract,
   generateReply,
@@ -543,3 +591,4 @@ module.exports = {
   generateConversationalResponse,
   generateReminderList
 };
+  

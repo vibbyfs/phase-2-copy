@@ -1,4 +1,6 @@
 // controllers/waController.js
+// Perubahan: state percakapan (pendingTitle), title fix (hindari "lagi"), reply natural
+
 const { DateTime } = require('luxon');
 const { User, Reminder, Friend } = require('../models');
 const { Op } = require('sequelize');
@@ -25,7 +27,7 @@ async function sendResponse(res, message, isTwilioWebhook = false, userPhone = n
   return res.json({ action: 'reply', body: message });
 }
 
-/** Helper human-friendly */
+/** Human-friendly time */
 function humanizeTimeWIB(iso) {
   if (!iso) return null;
   const dt = DateTime.fromISO(iso, { zone: WIB_TZ });
@@ -36,6 +38,7 @@ function humanizeTimeWIB(iso) {
   return dt.toFormat('dd/MM/yyyy HH:mm') + ' WIB';
 }
 
+/** Fallback jawaban yang instruktif */
 function politeFallback(ai, rawText) {
   const title = (ai?.title || '').trim() || extractTitleFromText(rawText) || 'pengingatmu';
   const timeStr = humanizeTimeWIB(ai?.dueAtWIB);
@@ -64,6 +67,20 @@ function chooseReply(ai, rawText) {
   return pf;
 }
 
+/** Cek judul generik berbasis waktu (agar tidak dipakai) */
+function isGenericTitle(title) {
+  if (!title) return true;
+  const t = title.trim().toLowerCase();
+  const bad = [
+    'lagi','nanti','besok','lusa','hari','jam','menit','detik','pukul','sekarang',
+    'malam','siang','pagi'
+  ];
+  if (bad.includes(t)) return true;
+  if (/^\d+$/.test(t)) return true; // angka doang
+  return false;
+}
+
+/** Controller utama */
 module.exports = {
   inbound: async (req, res) => {
     try {
@@ -93,7 +110,7 @@ module.exports = {
       const ai = await extract(text);
       console.log('[WA] parsed AI:', ai);
 
-      // ===== CANCEL / LIST =====
+      // ==== CANCEL / LIST ====
       if (ai.intent === 'cancel') {
         const activeReminders = await Reminder.findAll({
           where: { UserId: user.id, status: 'scheduled', repeat: { [Op.ne]: 'none' } },
@@ -178,52 +195,58 @@ module.exports = {
         return await sendResponse(res, listMessage, isTwilioWebhook, from);
       }
 
-      // ====== STATEFUL DIALOG ======
-      // 1) Jika NEED_TIME → simpan judul ke sesi (biar balasan jam berikutnya nyambung)
+      // ===== STATEFUL DIALOG =====
+      // Simpan title saat need_time / potential / unknown (kalau meaningful)
+      if ((ai.intent === 'need_time' || ai.intent === 'potential_reminder' || ai.intent === 'unknown') && ai.title && !isGenericTitle(ai.title)) {
+        setContext(user.id, { pendingTitle: ai.title });
+      }
+
+      // NEED_TIME: simpan judul → minta jam
       if (ai.intent === 'need_time' && ai.title) {
         setContext(user.id, { pendingTitle: ai.title });
         const reply = chooseReply(ai, text);
         return await sendResponse(res, reply, isTwilioWebhook, from);
       }
 
-      // 2) Jika NEED_CONTENT → lihat apakah ada judul tertunda di sesi
+      // NEED_CONTENT: jika ada pendingTitle → naikkan jadi CREATE
       if (ai.intent === 'need_content' && ai.dueAtWIB) {
         const ctx = getContext(user.id);
         if (ctx?.pendingTitle) {
-          // Transform jadi CREATE dengan title dari sesi
           ai.intent = 'create';
           ai.title = ctx.pendingTitle;
-          // sengaja lanjut ke flow CREATE di bawah
         } else {
-          // belum ada judul sebelumnya → tanya konten
           const reply = chooseReply(ai, text);
           return await sendResponse(res, reply, isTwilioWebhook, from);
         }
       }
 
-      // 3) Ngobrol dulu untuk potential/unknown
+      // Ngobrol dulu untuk potential/unknown
       if (['potential_reminder', 'unknown'].includes(ai.intent)) {
-        // Jika AI bisa menebak title, simpan agar step berikut lebih mulus
-        if (ai.title && ai.title !== 'Reminder') {
-          setContext(user.id, { pendingTitle: ai.title });
-        }
         const reply = chooseReply(ai, text);
         return await sendResponse(res, reply, isTwilioWebhook, from);
       }
 
-      // ===== GUARD: WAJIB create + ada dueAtWIB =====
+      // GUARD: wajib create + dueAtWIB
       if (ai.intent !== 'create' || !ai.dueAtWIB) {
         const reply = chooseReply(ai, text);
         return await sendResponse(res, reply, isTwilioWebhook, from);
       }
 
       // ===== CREATE REMINDER =====
-      // Prioritaskan title dari AI atau dari sesi, JANGAN fallback dari pesan waktu (menghindari "lagi")
       const sessionCtx = getContext(user.id);
-      const title =
-        (ai.title && ai.title !== 'Reminder' ? ai.title : null) ||
-        (sessionCtx?.pendingTitle ? sessionCtx.pendingTitle : null) ||
-        extractTitleFromText(text); // fallback terakhir (jarang kepakai)
+
+      // 1) utamakan AI title jika bukan generik
+      let title = (ai.title && !isGenericTitle(ai.title)) ? ai.title : '';
+
+      // 2) kalau AI title generik/kosong → pakai pendingTitle dari sesi
+      if (!title && sessionCtx?.pendingTitle) {
+        title = sessionCtx.pendingTitle;
+      }
+
+      // 3) fallback terakhir → extractTitleFromText
+      if (!title) {
+        title = extractTitleFromText(text);
+      }
 
       let repeat = ai.repeat || 'none';
       const timeType = ai.timeType || 'relative';
