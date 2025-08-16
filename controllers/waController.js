@@ -4,6 +4,8 @@ import { extractReminderData, generateAIResponse } from "../services/ai.js";
 import { scheduleReminder, listReminders, cancelAllReminders, cancelReminder } from "../services/scheduler.js";
 import { sendMessage } from "../services/waOutbound.js";
 import db from "../models/index.js";
+const { sendReminder } = require('../services/waOutbound');
+
 
 const WIB_TZ = "Asia/Jakarta";
 
