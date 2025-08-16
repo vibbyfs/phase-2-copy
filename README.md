@@ -66,7 +66,7 @@ npx sequelize-cli db:seed:all
 DATABASE_URL=your_database_url
 JWT_SECRET=your_jwt_secret
 
-# OpenAI for AI processing
+# OpenAI for AI processing (GPT-4o-mini for optimal cost-performance)
 OPENAI_API_KEY=your_openai_key
 
 # Twilio WhatsApp API
