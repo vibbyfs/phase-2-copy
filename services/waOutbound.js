@@ -1,57 +1,47 @@
-// services/waOutbound.js (CommonJS, Twilio)
-'use strict';
+// services/waOutbound.js (CommonJS)
+// Twilio WhatsApp sender
 
 const twilio = require('twilio');
 
-const {
-  TWILIO_ACCOUNT_SID = '',
-  TWILIO_AUTH_TOKEN = '',
-  TWILIO_WHATSAPP_FROM = 'whatsapp:+14155238886', // default sandbox
-} = process.env;
+const accountSid = process.env.TWILIO_ACCOUNT_SID;
+const authToken  = process.env.TWILIO_AUTH_TOKEN;
+const fromNumber = process.env.TWILIO_WHATSAPP_FROM || 'whatsapp:+14155238886';
 
-let client = null;
-if (TWILIO_ACCOUNT_SID && TWILIO_AUTH_TOKEN) {
-  try {
-    client = twilio(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN);
-  } catch (e) {
-    console.error('[WAOutbound] Gagal init Twilio:', e);
-  }
-} else {
+if (!accountSid || !authToken) {
   console.warn('[WAOutbound] TWILIO_ACCOUNT_SID / TWILIO_AUTH_TOKEN belum diset.');
 }
 
-function normalizeWhatsApp(num) {
-  if (!num) return num;
-  return num.startsWith('whatsapp:') ? num : `whatsapp:${num}`;
+const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
+
+function normalizeToWhatsApp(to) {
+  if (!to) return to;
+  const raw = to.replace(/^whatsapp:/, '');
+  return raw.startsWith('+') ? `whatsapp:${raw}` : `whatsapp:+${raw}`;
 }
 
-async function sendReminder(to, body, reminderId = null, mediaUrl = null) {
-  if (!client) throw new Error('Twilio not configured');
-
-  const payload = {
-    from: TWILIO_WHATSAPP_FROM.startsWith('whatsapp:')
-      ? TWILIO_WHATSAPP_FROM
-      : `whatsapp:${TWILIO_WHATSAPP_FROM}`,
-    to: normalizeWhatsApp(to),
-    body: body || '',
-  };
-  if (mediaUrl) payload.mediaUrl = mediaUrl;
-
-  const res = await client.messages.create(payload);
-
-  const result = {
+async function sendMessage(to, text, reminderId = null) {
+  if (!client) {
+    console.error('[WAOutbound] Twilio client belum terinisialisasi.');
+    throw new Error('Twilio not configured');
+  }
+  const toWA = normalizeToWhatsApp(to);
+  const res = await client.messages.create({
+    from: fromNumber,
+    to: toWA,
+    body: text,
+  });
+  console.log('[TWILIO] Message sent successfully:', {
     sid: res.sid,
-    to: res.to,
-    from: res.from,
+    to: toWA,
+    from: fromNumber,
     reminderId,
-    status: res.status || 'queued',
-  };
-  console.log('[TWILIO] Message sent successfully:', result);
-  return result;
+    status: res.status,
+  });
+  return res;
 }
 
-async function sendMessage(to, text, mediaUrl = null) {
-  return sendReminder(to, text, null, mediaUrl);
-}
-
-module.exports = { sendReminder, sendMessage };
+// Backward compatibility: some old code calls sendReminder
+module.exports = {
+  sendMessage,
+  sendReminder: sendMessage,
+};
