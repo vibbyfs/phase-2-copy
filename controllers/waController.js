@@ -96,9 +96,10 @@ async function inbound(req, res, next) {
         await replyToUser('Data pengingatnya sudah tidak ada. Coba daftar ulang ya 😊');
         return res.status(200).json({ ok: true });
       }
+      
+      // Cancel reminder (this will update status to 'cancelled' in database)
       await cancelReminder(reminder.id);
-      reminder.status = 'canceled';
-      await reminder.save();
+      
       sessionStore.setContext(fromPhone, { ...ctx, lastListedIds: [] });
       await replyToUser(`✅ Reminder nomor ${parsed.stopNumber} (${reminder.title}) sudah dibatalkan.`);
       return res.status(200).json({ ok: true });
@@ -137,6 +138,18 @@ async function inbound(req, res, next) {
         await replyToUser('Waktunya sudah lewat nih 😅 Mau pilih waktu lain?');
         return res.status(200).json({ ok: true });
       }
+
+      // Generate formatted message for reminder using AI
+      const formattedMessage = await ai.generateReply({
+        kind: 'reminder_delivery',
+        username,
+        title: parsed.title.trim(),
+        context: 'Generate a warm, motivational reminder message in Indonesian with relevant emoticons based on the activity.'
+      });
+
+      const finalFormattedMessage = formattedMessage || 
+        `Halo ${username}, waktunya ${parsed.title.trim()}! �`;
+
       const reminder = await Reminder.create({
         UserId: user.id,
         RecipientId: user.id,
@@ -144,7 +157,7 @@ async function inbound(req, res, next) {
         dueAt: dueAtUTC,
         repeat: parsed.repeat || 'none',
         status: 'scheduled',
-        formattedMessage: null
+        formattedMessage: finalFormattedMessage
       });
       await scheduleReminder(reminder);
       // persist minimal context (clear pending since created)
