@@ -1,112 +1,119 @@
-// services/scheduler.js (CommonJS)
-// Simple in-memory scheduler + DB reload on boot
-
-const { DateTime } = require('luxon');
-const { Reminder, User } = require('../models');
+// services/scheduler.js
+const schedule = require('node-schedule');
+const { Op } = require('sequelize');             // <<— Sequelize v6 operators
+const { User, Reminder } = require('../models');
 const { sendMessage } = require('./waOutbound');
-const { WIB_TZ, generateReply } = require('./ai');
 
-const timers = new Map();
+const jobs = new Map(); // reminderId -> schedule.Job
+
+function wibTs(date) {
+  const d = new Date(date);
+  return new Intl.DateTimeFormat('id-ID', {
+    timeZone: 'Asia/Jakarta',
+    year: 'numeric', month: '2-digit', day: '2-digit',
+    hour: '2-digit', minute: '2-digit', second: '2-digit'
+  }).format(d);
+}
 
 async function fireReminder(reminderId) {
   try {
     const reminder = await Reminder.findByPk(reminderId);
-    if (!reminder) return;
+    if (!reminder || reminder.status !== 'scheduled') return;
 
-    // Fetch recipient for phone/username
-    const recipient = await User.findByPk(reminder.RecipientId || reminder.UserId);
-    if (!recipient || !recipient.phone) return;
+    const user = await User.findByPk(reminder.RecipientId || reminder.UserId);
+    if (!user || !user.phone) return;
 
-    const name = recipient.name || recipient.username || 'kamu';
+    const to = String(user.phone); // pastikan string
     const title = reminder.title || 'pengingat';
+    const msg = `Halo ${user.username || 'kamu'}, ini pengingatmu untuk “${title}”. 😊`;
 
-    // Compose single-line message by AI
-    const text = await generateReply('reminder_send', { userName: name, title });
+    await sendMessage(to, msg, reminder.id);
 
-    await sendMessage(recipient.phone, text, reminder.id);
+    await Reminder.update({ status: 'sent' }, { where: { id: reminder.id } });
+  } catch (err) {
+    console.error('[SCHED] fire error', err);
+    await Reminder.update({ status: 'failed' }, { where: { id: reminderId } }).catch(() => {});
+  } finally {
+    const job = jobs.get(reminderId);
+    if (job) job.cancel();
+    jobs.delete(reminderId);
+  }
+}
 
-    // Update status for one-off reminders
-    if (reminder.repeat === 'none') {
-      reminder.status = 'sent';
-      await reminder.save();
-      timers.delete(reminderId);
-    } else {
-      // For recurring, compute next run
-      const next = computeNextRun(reminder);
-      if (!next) {
-        reminder.status = 'cancelled';
-        await reminder.save();
-        timers.delete(reminderId);
-        return;
-      }
-      reminder.dueAt = next.toUTC().toJSDate();
-      await reminder.save();
-      scheduleReminder(reminder); // reschedule
+function scheduleReminder(reminder) {
+  try {
+    const runAt = new Date(reminder.dueAt);
+    if (Number.isNaN(runAt.getTime())) {
+      console.warn('[SCHED] skip schedule, invalid date', { id: reminder.id, dueAt: reminder.dueAt });
+      return;
     }
-  } catch (e) {
-    console.error('[SCHED] fire error:', e);
+
+    const diff = runAt.getTime() - Date.now();
+
+    // Kirim instan bila sangat dekat (<= 2s) atau sudah lewat tipis
+    if (diff <= 2000) {
+      console.log('[SCHED] fire immediate', { id: reminder.id, at: runAt.toISOString(), atWIB: wibTs(runAt) });
+      setTimeout(() => fireReminder(reminder.id), Math.max(0, diff));
+      return;
+    }
+
+    const job = schedule.scheduleJob(runAt, () => {
+      console.log('[SCHED] fire job', { id: reminder.id, at: runAt.toISOString(), atWIB: wibTs(runAt) });
+      fireReminder(reminder.id);
+    });
+
+    jobs.set(reminder.id, job);
+    console.log('[SCHED] create job', { id: reminder.id, runAt: runAt.toISOString(), runAtWIB: wibTs(runAt) });
+  } catch (err) {
+    console.error('[SCHED] schedule error', err);
   }
 }
 
-function computeNextRun(reminder) {
-  const now = DateTime.now().setZone(WIB_TZ);
-  let next = DateTime.fromJSDate(reminder.dueAt).setZone(WIB_TZ);
+async function cancelReminder(reminderId) {
+  const job = jobs.get(reminderId);
+  if (job) job.cancel();
+  jobs.delete(reminderId);
 
-  switch (reminder.repeat) {
-    case 'hourly':
-      next = next.plus({ hours: 1 });
-      break;
-    case 'daily':
-      next = next.plus({ days: 1 });
-      break;
-    case 'weekly':
-      next = next.plus({ weeks: 1 });
-      break;
-    case 'monthly':
-      next = next.plus({ months: 1 });
-      break;
-    default:
-      return null;
-  }
-  if (next <= now) next = now.plus({ minutes: 1 });
-  return next;
-}
-
-function scheduleReminder(remOrPlain) {
-  const reminder = remOrPlain.dataValues ? remOrPlain : remOrPlain; // Sequelize or plain
-  const id = reminder.id;
-  const due = DateTime.fromJSDate(reminder.dueAt).toUTC();
-  const now = DateTime.utc();
-
-  const delay = Math.max(0, due.toMillis() - now.toMillis());
-
-  if (timers.has(id)) clearTimeout(timers.get(id));
-
-  // setTimeout limit ~24.8 days — OK for most reminders; recurring will reschedule anyway.
-  const t = setTimeout(() => fireReminder(id), delay);
-  timers.set(id, t);
-
-  console.log('[SCHED] create job', { id, runAt: due.toISO() });
-}
-
-function cancelReminder(reminderId) {
-  if (timers.has(reminderId)) {
-    clearTimeout(timers.get(reminderId));
-    timers.delete(reminderId);
-  }
+  await Reminder.update({ status: 'cancelled' }, { where: { id: reminderId } });
+  console.log('[SCHED] cancelled', { id: reminderId });
 }
 
 async function loadAllScheduledReminders() {
-  const list = await Reminder.findAll({
-    where: { status: 'scheduled' },
-    order: [['dueAt', 'ASC']],
-  });
-  for (const r of list) scheduleReminder(r);
-  console.log('[SCHED] loaded', list.length, 'reminders');
+  try {
+    // Backfill 5 menit ke belakang untuk handle restart
+    const since = new Date(Date.now() - 5 * 60 * 1000);
+
+    const rows = await Reminder.findAll({
+      where: {
+        status: 'scheduled',
+        dueAt: { [Op.gte]: since }             // <<— gunakan Op.gte (bukan `$gte`)
+      },
+      order: [['dueAt', 'ASC']]
+    });
+
+    console.log('[SCHED] loaded', rows.length, 'reminders');
+
+    const now = Date.now();
+    for (const r of rows) {
+      const runAt = new Date(r.dueAt);
+      if (Number.isNaN(runAt.getTime())) continue;
+
+      if (runAt.getTime() <= now) {
+        console.log('[SCHED] backfill fire', { id: r.id, at: runAt.toISOString(), atWIB: wibTs(runAt) });
+        setTimeout(() => fireReminder(r.id), 100);
+      } else {
+        scheduleReminder(r);
+      }
+    }
+
+    console.log('[SCHED] loaded at startup');
+  } catch (err) {
+    console.error('Scheduler init error', err);
+  }
 }
 
 module.exports = {
   scheduleReminder,
   cancelReminder,
-  loadAllScheduledReminders,
+  loadAllScheduledReminders
 };
