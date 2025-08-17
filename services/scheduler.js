@@ -55,8 +55,47 @@ async function fireReminder(reminderId) {
           if (!recipient || !recipient.phone) continue;
 
           const to = String(recipient.phone);
-          const msg = reminder.formattedMessage || 
-            `Halo ${recipient.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
+          
+          // Personalize message for each recipient
+          let msg = reminder.formattedMessage;
+          if (msg && msg.includes('{RECIPIENT_NAME}')) {
+            // Replace recipient name placeholder
+            msg = msg.replace('{RECIPIENT_NAME}', recipient.username);
+            
+            // Generate AI motivational message based on context
+            if (msg.includes('{AI_MOTIVATIONAL}')) {
+              try {
+                const motivationalMsg = await ai.generateReply({
+                  kind: 'motivational_reminder',
+                  username: recipient.username,
+                  title: title,
+                  context: `Generate a short motivational message in Indonesian for reminder: "${title}". Include relevant emoticons. Keep it personal and encouraging, max 1 sentence.`
+                });
+                
+                const finalMotivational = motivationalMsg || 'semoga ini jadi dorongan kecil yang memotivasi kamu! ✨';
+                msg = msg.replace('{AI_MOTIVATIONAL}', finalMotivational);
+              } catch (aiError) {
+                console.error('[SCHED] AI motivational error:', aiError);
+                msg = msg.replace('{AI_MOTIVATIONAL}', 'semoga ini jadi dorongan kecil yang memotivasi kamu! ✨');
+              }
+            }
+          } else {
+            // Fallback message with AI motivational
+            try {
+              const motivationalMsg = await ai.generateReply({
+                kind: 'motivational_reminder',
+                username: recipient.username,
+                title: title,
+                context: `Generate a short motivational message in Indonesian for reminder: "${title}". Include relevant emoticons. Keep it personal and encouraging, max 1 sentence.`
+              });
+              
+              const finalMotivational = motivationalMsg || 'semoga harimu berjalan lancar ya ✨🙏';
+              msg = `Halo ${recipient.username}, ini pengingatmu untuk "${title}". ${finalMotivational}`;
+            } catch (aiError) {
+              console.error('[SCHED] AI fallback error:', aiError);
+              msg = `Halo ${recipient.username}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
+            }
+          }
 
           await sendMessage(to, msg, reminder.id);
           

@@ -92,16 +92,16 @@ async function validateAndGetRecipients(creatorUserId, usernames) {
  * @param {string} originalMessage - Pesan asli
  * @param {User[]} recipients - Array recipient users
  * @param {User} creator - User yang membuat reminder
- * @returns {string} - Formatted message
+ * @returns {string} - Formatted message template
  */
 function generateMultiRecipientMessage(originalMessage, recipients, creator) {
   if (!recipients || recipients.length === 0) {
     return originalMessage;
   }
 
-  const recipientNames = recipients.map(user => user.username).join(', ');
-  
-  return `📝 *Reminder untuk: ${recipientNames}*\n\n${originalMessage}\n\n_Dibuat oleh: ${creator.username}_`;
+  // Format: "Hai [username], dapat pesan dari [creator], "[pesan]", [AI_MOTIVATIONAL]"
+  // AI_MOTIVATIONAL akan di-replace oleh scheduler dengan pesan AI yang sesuai konteks
+  return `Hai {RECIPIENT_NAME}, dapat pesan dari ${creator.username}, "${originalMessage}", {AI_MOTIVATIONAL}`;
 }
 
 /**

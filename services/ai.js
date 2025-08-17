@@ -6,7 +6,12 @@
    - Always return robust fallback when API fails
 */
 const OpenAI = require('openai');
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Initialize OpenAI client only if API key is available
+let openai = null;
+if (process.env.OPENAI_API_KEY) {
+  openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+}
 
 // Utility: safe JSON extractor (grabs first top-level object)
 function safeParseJSON(text) {
@@ -24,6 +29,11 @@ function safeParseJSON(text) {
 }
 
 async function chatJSON(system, user, extraMessages = []) {
+  // Check if OpenAI client is available
+  if (!openai) {
+    throw new Error('OpenAI API key not configured');
+  }
+  
   const messages = [
     { role: 'system', content: system },
     ...extraMessages,

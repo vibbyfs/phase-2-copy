@@ -232,8 +232,8 @@ async function inbound(req, res) {
         
         let confirmMessage;
         if (recipientUsers.length > 0) {
-          const recipientNames = recipientUsers.map(u => u.username).join(', ');
-          confirmMessage = `✅ Siap! Aku akan mengingatkan ${recipientNames} "${parsed.title}" ${intervalText}. 😊`;
+          const recipientMentions = recipientUsers.map(u => `@${u.username}`).join(' ');
+          confirmMessage = `✅ Siap! Aku sudah membuat pengingat ke ${recipientMentions} "${parsed.title}".`;
         } else {
           confirmMessage = `✅ Siap! Aku akan mengingatkan kamu "${parsed.title}" ${intervalText}. 😊`;
         }
@@ -333,16 +333,8 @@ async function inbound(req, res) {
         
         let confirmMessage;
         if (recipientUsers.length > 0) {
-          const recipientNames = recipientUsers.map(u => u.username).join(', ');
-          // Ask AI for a one-line confirm
-          const confirm = await ai.generateReply({
-            kind: 'confirm_create',
-            username,
-            title: parsed.title,
-            whenText,
-            context: `Multi-recipient reminder for: ${recipientNames}`
-          });
-          confirmMessage = confirm || `✅ Siap! Aku akan ingatkan ${recipientNames} untuk "${parsed.title}" ${whenText}.`;
+          const recipientMentions = recipientUsers.map(u => `@${u.username}`).join(' ');
+          confirmMessage = `✅ Siap! Aku sudah membuat pengingat ke ${recipientMentions} "${parsed.title}".`;
         } else {
           // Ask AI for a one-line confirm
           const confirm = await ai.generateReply({
