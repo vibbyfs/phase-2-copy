@@ -181,8 +181,16 @@ async function inbound(req, res) {
           await replyToUser('Jamnya belum kebaca dengan jelas nih 😅 Kamu mau diingatkan jam berapa?');
           return res.status(200).json({ ok: true });
         }
-        // prevent past
-        if (dayjs(dueAtUTC).isBefore(dayjs())) {
+        
+        // Debug logging for time checking
+        console.log(`[WA Controller] Time check - dueAtWIB: ${parsed.dueAtWIB}, dueAtUTC: ${dueAtUTC.toISOString()}, now: ${new Date().toISOString()}, timeType: ${parsed.timeType}`);
+        
+        // prevent past (with 30 second tolerance for relative times)
+        const tolerance = parsed.timeType === 'relative' ? 30000 : 0; // 30 seconds tolerance for relative times
+        const now = new Date(Date.now() - tolerance);
+        
+        if (dayjs(dueAtUTC).isBefore(dayjs(now))) {
+          console.log(`[WA Controller] Time rejected - dueAt: ${dueAtUTC.toISOString()}, checkAgainst: ${now.toISOString()}`);
           await replyToUser('Waktunya sudah lewat nih 😅 Mau pilih waktu lain?');
           return res.status(200).json({ ok: true });
         }
