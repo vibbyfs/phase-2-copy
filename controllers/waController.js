@@ -81,8 +81,8 @@ async function inbound(req, res) {
     // Handle different intents
     if (parsed.intent === 'create' && parsed.title) {
       
-      // Handle repeat reminders (no specific time needed)
-      if (parsed.repeat && parsed.repeat !== 'none' && !parsed.dueAtWIB) {
+      // Handle repeat reminders (prioritize repeat over specific time)
+      if (parsed.repeat && parsed.repeat !== 'none') {
         let startTime = new Date();
         
         if (parsed.repeat === 'minutes' || parsed.repeat === 'hours') {
