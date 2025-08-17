@@ -48,6 +48,37 @@ async function fireReminder(reminderId) {
     await sendMessage(to, msg, reminder.id);
 
     await Reminder.update({ status: 'sent' }, { where: { id: reminder.id } });
+
+    // Check if this is a recurring reminder
+    if (reminder.isRecurring && reminder.repeatType !== 'once') {
+      const nextDate = calculateNextRepeatDate(reminder);
+      if (nextDate) {
+        // Create next occurrence
+        const nextReminder = await Reminder.create({
+          title: reminder.title,
+          content: reminder.content,
+          dueAt: nextDate,
+          UserId: reminder.UserId,
+          RecipientId: reminder.RecipientId,
+          repeatType: reminder.repeatType,
+          repeatInterval: reminder.repeatInterval,
+          repeatEndDate: reminder.repeatEndDate,
+          parentReminderId: reminder.parentReminderId || reminder.id,
+          isRecurring: true,
+          status: 'scheduled',
+          formattedMessage: reminder.formattedMessage
+        });
+        
+        console.log('[SCHED] created next occurrence', { 
+          originalId: reminder.id, 
+          nextId: nextReminder.id, 
+          nextDate: nextDate.toISOString() 
+        });
+        
+        // Schedule the next occurrence
+        scheduleReminder(nextReminder);
+      }
+    }
   } catch (err) {
     console.error('[SCHED] fire error', err);
     await Reminder.update({ status: 'failed' }, { where: { id: reminderId } }).catch(() => {});
@@ -56,6 +87,54 @@ async function fireReminder(reminderId) {
     if (job) job.cancel();
     jobs.delete(reminderId);
   }
+}
+
+function calculateNextRepeatDate(reminder) {
+  const currentDate = new Date(reminder.dueAt);
+  const now = new Date();
+  
+  // Check if repeat has ended
+  if (reminder.repeatEndDate && now > new Date(reminder.repeatEndDate)) {
+    return null;
+  }
+  
+  let nextDate = new Date(currentDate);
+  
+  switch (reminder.repeatType) {
+    case 'minutes':
+      nextDate.setMinutes(nextDate.getMinutes() + (reminder.repeatInterval || 30));
+      break;
+      
+    case 'hours':
+      nextDate.setHours(nextDate.getHours() + (reminder.repeatInterval || 1));
+      break;
+      
+    case 'daily':
+      nextDate.setDate(nextDate.getDate() + 1);
+      break;
+      
+    case 'weekly':
+      nextDate.setDate(nextDate.getDate() + 7);
+      break;
+      
+    case 'monthly':
+      nextDate.setMonth(nextDate.getMonth() + 1);
+      break;
+      
+    case 'yearly':
+      nextDate.setFullYear(nextDate.getFullYear() + 1);
+      break;
+      
+    default:
+      return null;
+  }
+  
+  // Check if next date exceeds end date
+  if (reminder.repeatEndDate && nextDate > new Date(reminder.repeatEndDate)) {
+    return null;
+  }
+  
+  return nextDate;
 }
 
 function scheduleReminder(reminder) {

@@ -180,6 +180,10 @@ async function inbound(req, res, next) {
         title: parsed.title.trim(),
         dueAt: dueAtUTC,
         repeat: parsed.repeat || 'none',
+        repeatType: parsed.repeat || 'once',
+        repeatInterval: parsed.repeatDetails?.interval || null,
+        repeatEndDate: parsed.repeatDetails?.endDate ? new Date(parsed.repeatDetails.endDate) : null,
+        isRecurring: parsed.repeat !== 'none',
         status: 'scheduled',
         formattedMessage: finalFormattedMessage
       });

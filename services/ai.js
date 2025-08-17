@@ -56,11 +56,14 @@ Skema:
   "recipientUsernames": string[],                 // jika menyebut nama teman
   "timeType": "relative" | "absolute",            // jenis waktu bila ada
   "dueAtWIB": string | null,                      // ISO 8601 Asia/Jakarta (contoh "2025-08-17T14:00:00+07:00")
-  "repeat": "none" | "daily" | "weekly" | "monthly",
+  "repeat": "none" | "minutes" | "hours" | "daily" | "weekly" | "monthly" | "yearly",
   "repeatDetails": {
-    "timeOfDay": string | null,                   // "14:00", dsb
+    "interval": number | null,                    // untuk minutes/hours: interval number (30 menit = 30)
+    "timeOfDay": string | null,                   // "14:00", dsb untuk daily/weekly/monthly
     "dayOfWeek": string | null,                   // "senin", dsb (bila weekly)
-    "dayOfMonth": number | null                   // (bila monthly)
+    "dayOfMonth": number | null,                  // (bila monthly)
+    "monthDay": string | null,                    // "12 Mei" (bila yearly)
+    "endDate": string | null                      // "sampai 30 Sep" atau "selama 3 bulan"
   },
   "cancelKeyword": string | null,                 // bila user kirim --reminder <keyword>
   "stopNumber": number | null,                    // bila user kirim "stop (N)"
@@ -75,6 +78,13 @@ Aturan penting:
 - Jika mulai dengan "--reminder <keyword>", intent = "cancel_keyword", cancelKeyword=keyword.
 - Jika format "stop (N)" atau "batal (N)" atau hanya angka setelah list reminder, intent = "stop_number", stopNumber=N.
 - Jika "list" => intent = "list".
+- Repeat patterns:
+  - "setiap X menit/jam" → repeat="minutes"/"hours", interval=X
+  - "setiap hari jam X" → repeat="daily", timeOfDay="X"
+  - "setiap senin/selasa jam X" → repeat="weekly", dayOfWeek="senin", timeOfDay="X"
+  - "setiap tanggal X jam Y" → repeat="monthly", dayOfMonth=X, timeOfDay="Y"
+  - "setiap 12 Mei jam X" → repeat="yearly", monthDay="12 Mei", timeOfDay="X"
+  - "sampai 30 Sep" atau "selama 3 bulan" → endDate extract
 - Waktu:
   - Pahami: "1/2/5/15 menit lagi", "jam 20.00", "20:30", "besok jam 2 siang", "rabu depan jam 3", "lusa", "pagi/siang/sore/malam".
   - Konversi ke WIB ISO di dueAtWIB (gunakan nowWIB). Jika hanya hari (mis. "besok") tanpa jam, minta jam -> intent "need_time".
@@ -121,7 +131,14 @@ async function extract({ text, userProfile = {}, sessionContext = {} }) {
       timeType: 'absolute',
       dueAtWIB: null,
       repeat: 'none',
-      repeatDetails: { timeOfDay: null, dayOfWeek: null, dayOfMonth: null },
+      repeatDetails: { 
+        interval: null,
+        timeOfDay: null, 
+        dayOfWeek: null, 
+        dayOfMonth: null,
+        monthDay: null,
+        endDate: null
+      },
       cancelKeyword: null,
       stopNumber: null,
       reply: 'Aku di sini buat bantu kamu bikin pengingat biar nggak lupa. Mau diingatkan tentang apa, dan kapan? 😊'

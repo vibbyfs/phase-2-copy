@@ -21,9 +21,19 @@
   },
   {
     "id": 3,
-    "username": "neubri",
-    "phone": "+6287713371998",
+    "username": "andi",
+    "phone": "+628980969666",
     "email": "neubri@mail.com",
+    "password": "password",
+    "timezone": "Asia/Jakarta",
+    "createdAt": "2025-08-09T14:05:00Z",
+    "updatedAt": "2025-08-09T14:05:00Z"
+  },
+  {
+    "id": 4,
+    "username": "syukur",
+    "phone": "+6281290876968",
+    "email": "syukur@mail.com",
     "password": "password",
     "timezone": "Asia/Jakarta",
     "createdAt": "2025-08-09T14:05:00Z",
