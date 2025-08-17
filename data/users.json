@@ -38,5 +38,25 @@
     "timezone": "Asia/Jakarta",
     "createdAt": "2025-08-09T14:05:00Z",
     "updatedAt": "2025-08-09T14:05:00Z"
+  },
+  {
+    "id": 5,
+    "username": "andien",
+    "phone": "+628981976777",
+    "email": "andien@mail.com",
+    "password": "password",
+    "timezone": "Asia/Jakarta",
+    "createdAt": "2025-08-09T14:05:00Z",
+    "updatedAt": "2025-08-09T14:05:00Z"
+  },
+  {
+    "id": 6,
+    "username": "riri",
+    "phone": "+6287777798787",
+    "email": "riri@mail.com",
+    "password": "password",
+    "timezone": "Asia/Jakarta",
+    "createdAt": "2025-08-09T14:05:00Z",
+    "updatedAt": "2025-08-09T14:05:00Z"
   }
 ]

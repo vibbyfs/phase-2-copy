@@ -99,10 +99,15 @@ async function fireReminder(reminderId) {
 
           await sendMessage(to, msg, reminder.id);
           
-          // Update specific ReminderRecipient status
+          // Update specific ReminderRecipient status using composite key
           await ReminderRecipient.update(
             { status: 'sent', sentAt: new Date() },
-            { where: { id: reminderRecipient.id } }
+            { 
+              where: { 
+                ReminderId: reminder.id,
+                RecipientId: reminderRecipient.RecipientId 
+              } 
+            }
           );
           
           sentCount++;
@@ -113,7 +118,12 @@ async function fireReminder(reminderId) {
           // Mark this specific recipient as failed but don't stop the whole process
           await ReminderRecipient.update(
             { status: 'cancelled' },
-            { where: { id: reminderRecipient.id } }
+            { 
+              where: { 
+                ReminderId: reminder.id,
+                RecipientId: reminderRecipient.RecipientId 
+              } 
+            }
           );
         }
       }
