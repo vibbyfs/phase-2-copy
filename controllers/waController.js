@@ -1,291 +1,296 @@
-// controllers/waController.js (CommonJS)
-// Twilio webhook + conversational AI flow (natural replies + deterministic actions)
+// controllers/waController.js
+// CommonJS, full conversational flow, Twilio direct via waOutbound.sendMessage
 
 const { DateTime } = require('luxon');
 const { Op } = require('sequelize');
 const { User, Reminder } = require('../models');
+const { scheduleReminder, cancelReminder, loadAllScheduledReminders } = require('../services/scheduler');
+const { extract } = require('../services/ai');
+const { sendMessage } = require('../services/waOutbound'); // pastikan fungsi ini ada
+const session = require('../services/session'); // pastikan ada penyimpanan sederhana (in-memory) { get, set, clear }
 
-const { extract, generateReply, WIB_TZ } = require('../services/ai');
-const { scheduleReminder, cancelReminder } = require('../services/scheduler');
-const session = require('../services/session');
-const { sendMessage } = require('../services/waOutbound');
+const WIB_TZ = 'Asia/Jakarta';
 
-async function sendResponseTwilio(res, text) {
-  // Kita aktif kirim via Twilio API (sendMessage) lalu balas TwiML kosong
-  res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
-}
-
-function humanTimeDescription(dueDateWIB, nowWIB) {
+// Helper: format natural time description
+function describeTime(dueDateWIB, nowWIB) {
   const diffMin = Math.round(dueDateWIB.diff(nowWIB, 'minutes').minutes);
-  if (diffMin < 60 && diffMin >= 0) return `${diffMin} menit lagi`;
-  if (diffMin < 24 * 60 && diffMin >= 0) {
-    const hours = Math.round(diffMin / 60);
-    return `${hours} jam lagi`;
+  if (diffMin < 0) return 'waktu sudah lewat';
+  if (diffMin < 60) return `${diffMin} menit lagi`;
+  if (diffMin < 24 * 60) {
+    const h = Math.round(diffMin / 60);
+    return `${h} jam lagi`;
   }
-  if (dueDateWIB.hasSame(nowWIB, 'day')) {
-    return `hari ini jam ${dueDateWIB.toFormat('HH:mm')} WIB`;
-  }
-  if (dueDateWIB.hasSame(nowWIB.plus({ days: 1 }), 'day')) {
-    return `besok jam ${dueDateWIB.toFormat('HH:mm')} WIB`;
-  }
-  return dueDateWIB.toFormat('dd/LL/yyyy HH:mm') + ' WIB';
+  const isToday = dueDateWIB.hasSame(nowWIB, 'day');
+  const isTomorrow = dueDateWIB.hasSame(nowWIB.plus({ days: 1 }), 'day');
+  if (isToday) return `hari ini jam ${dueDateWIB.toFormat('HH.mm')} WIB`;
+  if (isTomorrow) return `besok jam ${dueDateWIB.toFormat('HH.mm')} WIB`;
+  return dueDateWIB.toFormat('ccc, dd/LL HH.mm') + ' WIB';
 }
 
-async function handleList(user, phone, keyword = null) {
-  const where = {
-    UserId: user.id,
-    status: 'scheduled',
-  };
-  if (keyword) where.title = { [Op.iLike]: `%${keyword}%` };
-
-  const items = await Reminder.findAll({
-    where,
-    order: [['dueAt', 'ASC']],
-    limit: 10,
-  });
-
-  session.setListCache(phone, items, keyword || null);
-
-  if (!items.length) {
-    const msg = keyword
-      ? `Tidak ada pengingat aktif yang mengandung "${keyword}" ya.`
-      : 'Tidak ada pengingat aktif saat ini.';
-    await sendMessage(phone, msg, null);
-    return;
+// Helper: kirim reply (Twilio webhook or JSON)
+async function replyOut(res, to, text, isTwilio) {
+  if (isTwilio) {
+    try {
+      await sendMessage(to, text, null);
+    } catch (e) {
+      console.error('[WAOutbound] gagal kirim balasan:', e);
+    }
+    // Twilio butuh response kosong
+    return res.type('text/xml').send('<?xml version="1.0" encoding="UTF-8"?><Response></Response>');
+  } else {
+    return res.json({ action: 'reply', body: text });
   }
-
-  let text = keyword
-    ? `Berikut pengingat aktif terkait "${keyword}":\n`
-    : `📋 Daftar pengingat aktif (${items.length}):\n`;
-
-  items.forEach((r, i) => {
-    const w = DateTime.fromJSDate(r.dueAt).setZone(WIB_TZ);
-    const rep = r.repeat !== 'none' ? ` (${r.repeat})` : '';
-    text += `${i + 1}. ${r.title} – ${w.toFormat('ccc, dd/LL HH:mm')} WIB${rep}\n`;
-  });
-  text += `\nKetik: stop (1) untuk membatalkan salah satunya.`;
-
-  await sendMessage(phone, text, null);
-}
-
-async function cancelByNumber(user, phone, numStr) {
-  const s = session.get(phone);
-  let list = s.lastListCache;
-
-  if (!list || !list.length) {
-    // fallback ke semua active
-    list = await Reminder.findAll({
-      where: { UserId: user.id, status: 'scheduled' },
-      order: [['dueAt', 'ASC']],
-      limit: 10,
-    });
-    session.setListCache(phone, list, null);
-  }
-
-  const idx = parseInt(numStr, 10) - 1;
-  if (isNaN(idx) || idx < 0 || idx >= list.length) {
-    await sendMessage(phone, 'Nomornya kurang pas nih 😅 Coba cek lagi daftar reminder-nya ya.', null);
-    return;
-  }
-
-  const target = list[idx];
-  target.status = 'cancelled';
-  await target.save();
-  cancelReminder(target.id);
-
-  const text = `✅ Reminder nomor ${idx + 1} (${target.title}) sudah dibatalkan.`;
-  await sendMessage(phone, text, null);
 }
 
 module.exports = {
   inbound: async (req, res) => {
+    // Bungkus semua dengan try-catch dan pastikan braces seimbang
     try {
-      // Twilio webhook
-      const isTwilio = !!(req.body && req.body.From && req.body.Body);
-      const from = isTwilio ? req.body.From.replace('whatsapp:', '') : (req.body.from || '').replace('whatsapp:', '');
-      const text = isTwilio ? req.body.Body : req.body.text;
+      // 1) Ambil payload (Twilio / custom)
+      let from, text, isTwilio = false;
+      if (req.body && req.body.From && req.body.Body) {
+        from = String(req.body.From).replace('whatsapp:', '');
+        text = req.body.Body || '';
+        isTwilio = true;
+      } else {
+        from = req.body?.from;
+        text = req.body?.text || '';
+      }
 
       if (!from || !text) {
-        console.log('[WA] Invalid request', { from, text });
-        return res.status(400).json({ error: 'Missing fields' });
+        return res.status(400).json({ error: 'Missing from or text' });
       }
-
       console.log('[WA] inbound from:', from, 'text:', text);
 
-      // Find user
+      // 2) Cari user
       const user = await User.findOne({ where: { phone: from } });
       if (!user) {
-        await sendMessage(from, 'Nomormu belum terdaftar. Daftar dulu ya 😊', null);
-        return sendResponseTwilio(res, '');
+        const msg = 'Nomormu belum terdaftar. Yuk daftar dulu biar aku bisa bantu bikin pengingat 😊';
+        return await replyOut(res, from, msg, isTwilio);
       }
 
-      // Init session state
-      const s = session.get(from);
-      if (!s.userName) session.set(from, { userName: user.name || user.username || null });
-
-      // --- Extract via AI ---
-      const ai = await extract(text, s);
-      const reply = ai.reply || null;
-      const action = ai.action || { type: 'none' };
-
-      // Always send the conversational reply first (natural, non-template)
-      if (reply) {
-        await sendMessage(from, reply, null);
-      }
-
-      // Handle actions deterministically
       const nowWIB = DateTime.now().setZone(WIB_TZ);
 
-      switch (action.type) {
-        case 'cancel_all': {
-          const all = await Reminder.findAll({ where: { UserId: user.id, status: 'scheduled' } });
-          for (const r of all) {
-            r.status = 'cancelled';
-            await r.save();
-            cancelReminder(r.id);
-          }
-          await sendMessage(from, `✅ Semua ${all.length} pengingat aktif dibatalkan.`, null);
-          break;
+      // 3) Ambil context sementara di session (judul/tanggal dari step sebelumnya)
+      const sess = session.get(from) || {};
+      const pendingTitle = sess.pendingTitle || null;
+      const pendingDueAtWIB = sess.pendingDueAtWIB || null;
+      const lastList = Array.isArray(sess.lastList) ? sess.lastList : [];
+
+      // 4) AI extract (natural + JSON)
+      const ai = await extract(text, {
+        userName: user.name || user.username || null,
+        timezone: WIB_TZ
+      });
+      console.log('[AI] parsed:', ai);
+
+      // 5) Intent cepat: stop (No)
+      if (ai.intent === 'stop_number' && ai.stopNumber != null) {
+        const idx = ai.stopNumber - 1;
+        const list = lastList.length ? lastList : await Reminder.findAll({
+          where: { UserId: user.id, status: 'scheduled' },
+          order: [['dueAt', 'ASC']],
+          limit: 10
+        });
+
+        if (!list.length || idx < 0 || idx >= list.length) {
+          const msg = 'Nomornya kurang pas nih 😅 Coba cek lagi daftar reminder-nya ya.';
+          return await replyOut(res, from, msg, isTwilio);
         }
 
-        case 'cancel': {
-          // Only recurring
-          const list = await Reminder.findAll({
-            where: { UserId: user.id, status: 'scheduled', repeat: { [Op.ne]: 'none' } },
-          });
-          if (!list.length) {
-            await sendMessage(from, 'Tidak ada pengingat berulang yang aktif.', null);
-            break;
-          }
-          for (const r of list) {
-            r.status = 'cancelled';
-            await r.save();
-            cancelReminder(r.id);
-          }
-          await sendMessage(from, `✅ ${list.length} pengingat berulang dibatalkan.`, null);
-          break;
-        }
+        const target = list[idx];
+        target.status = 'cancelled';
+        await target.save();
+        cancelReminder(target.id);
 
-        case 'cancel_keyword': {
-          const keyword = (action.cancelKeyword || '').trim();
-          await handleList(user, from, keyword);
-          break;
-        }
+        // bersihkan list setelah cancel
+        session.set(from, { ...sess, lastList: [] });
 
-        case 'stop_number': {
-          await cancelByNumber(user, from, action.stopNumber);
-          break;
-        }
-
-        case 'list': {
-          await handleList(user, from, null);
-          break;
-        }
-
-        case 'need_time': {
-          // store pending title
-          const title = (action.title || '').trim();
-          if (title) session.set(from, { pendingTitle: title });
-          // The reply already asked the time.
-          break;
-        }
-
-        case 'need_content': {
-          // store pending dueAt
-          const dueAtWIB = action.dueAtWIB ? DateTime.fromISO(action.dueAtWIB) : null;
-          if (dueAtWIB && dueAtWIB.isValid) {
-            session.set(from, { pendingDueAtWIB: dueAtWIB.toISO() });
-          }
-          // The reply already asked the content.
-          break;
-        }
-
-        case 'potential_reminder': {
-          // store possible title
-          const title = (action.title || '').trim();
-          if (title) session.set(from, { pendingTitle: title });
-          break;
-        }
-
-        case 'create': {
-          // Determine title
-          let title = (action.title || '').trim();
-          if (!title && s.pendingTitle) title = s.pendingTitle;
-
-          // Determine dueAt
-          let dueAtWIB = action.dueAtWIB ? DateTime.fromISO(action.dueAtWIB) : null;
-          if ((!dueAtWIB || !dueAtWIB.isValid) && s.pendingDueAtWIB) {
-            const tmp = DateTime.fromISO(s.pendingDueAtWIB);
-            if (tmp.isValid) dueAtWIB = tmp;
-          }
-
-          // As a fallback, if still no dueAt -> ask again (safety)
-          if (!dueAtWIB || !dueAtWIB.isValid) {
-            const ask = await generateReply('ask_time', { title: title || 'pengingat' });
-            await sendMessage(from, ask, null);
-            session.set(from, { pendingTitle: title || null });
-            break;
-          }
-
-          // If dueAt has passed, ask reschedule
-          const dueWIB = dueAtWIB.setZone(WIB_TZ);
-          if (dueWIB <= nowWIB) {
-            const ask = await generateReply('time_passed', { title: title || 'pengingat' });
-            await sendMessage(from, ask, null);
-            // keep pending
-            session.set(from, { pendingTitle: title || null, pendingDueAtWIB: null });
-            break;
-          }
-
-          // Repeat handling
-          const repeat = action.repeat || 'none';
-          const repeatDetails = action.repeatDetails || {};
-
-          // Create reminder
-          const reminder = await Reminder.create({
-            UserId: user.id,
-            RecipientId: user.id,
-            title: title || 'Pengingat',
-            dueAt: dueWIB.toUTC().toJSDate(),
-            repeat,
-            status: 'scheduled',
-            formattedMessage: null, // generated at send-time by AI
-          });
-
-          // Schedule
-          scheduleReminder(reminder);
-
-          // Confirm to user (one-liner AI)
-          const timeText = humanTimeDescription(dueWIB, nowWIB);
-          const confirm = await generateReply('confirm', {
-            userName: user.name || user.username || 'kamu',
-            title: title || 'Pengingat',
-            timeText,
-            repeat,
-          });
-          await sendMessage(from, confirm, null);
-
-          // clear pending
-          session.clearPending(from);
-          break;
-        }
-
-        case 'none':
-        default:
-          // nothing more to do
-          break;
+        const tWIB = DateTime.fromJSDate(target.dueAt).setZone(WIB_TZ).toFormat('ccc, dd/LL HH.mm');
+        const msg = `✅ Reminder nomor ${ai.stopNumber} (${target.title} – ${tWIB} WIB) sudah dibatalkan. Kalau butuh pengingat baru, tinggal bilang ya 😊`;
+        return await replyOut(res, from, msg, isTwilio);
       }
 
-      return sendResponseTwilio(res, '');
+      // 6) Intent cepat: --reminder keyword
+      if (ai.intent === 'cancel_keyword' && ai.cancelKeyword) {
+        const list = await Reminder.findAll({
+          where: {
+            UserId: user.id,
+            status: 'scheduled',
+            title: { [Op.iLike]: `%${ai.cancelKeyword}%` }
+          },
+          order: [['dueAt', 'ASC']],
+          limit: 10
+        });
+
+        if (!list.length) {
+          const msg = `Tidak ada reminder aktif yang mengandung kata "${ai.cancelKeyword}" 😊`;
+          return await replyOut(res, from, msg, isTwilio);
+        }
+
+        // simpan list bernomor di session
+        session.set(from, { ...sess, lastList: list });
+
+        let lines = `Berikut pengingat aktif terkait "${ai.cancelKeyword}":\n`;
+        list.forEach((r, i) => {
+          const tWIB = DateTime.fromJSDate(r.dueAt).setZone(WIB_TZ).toFormat('ccc, dd/LL HH.mm');
+          lines += `${i + 1}. ${r.title} – ${tWIB} WIB\n`;
+        });
+        lines += `\nKetik: \`stop (${list.length >= 1 ? 1 : 'No'})\` untuk membatalkan salah satu.`;
+        return await replyOut(res, from, lines, isTwilio);
+      }
+
+      // 7) Intent: list
+      if (ai.intent === 'list') {
+        const actives = await Reminder.findAll({
+          where: { UserId: user.id, status: 'scheduled' },
+          order: [['dueAt', 'ASC']],
+          limit: 10
+        });
+
+        if (!actives.length) {
+          return await replyOut(res, from, 'Tidak ada reminder aktif saat ini 😊', isTwilio);
+        }
+
+        session.set(from, { ...sess, lastList: actives });
+        let msg = `📋 Daftar reminder aktif (${actives.length}):\n`;
+        actives.forEach((r, i) => {
+          const tWIB = DateTime.fromJSDate(r.dueAt).setZone(WIB_TZ).toFormat('ccc, dd/LL HH.mm');
+          msg += `${i + 1}. ${r.title} – ${tWIB} WIB\n`;
+        });
+        msg += `\nTip: ketik \`--reminder <keyword>\` untuk filter atau \`stop (No)\` untuk batal salah satu.`;
+        return await replyOut(res, from, msg, isTwilio);
+      }
+
+      // 8) Intent: cancel all
+      if (ai.intent === 'cancel_all') {
+        const list = await Reminder.findAll({
+          where: { UserId: user.id, status: 'scheduled' },
+          order: [['createdAt', 'DESC']]
+        });
+        if (!list.length) {
+          return await replyOut(res, from, 'Tidak ada reminder aktif untuk dibatalkan 😊', isTwilio);
+        }
+        for (const r of list) {
+          r.status = 'cancelled';
+          await r.save();
+          cancelReminder(r.id);
+        }
+        session.set(from, { ...sess, lastList: [] });
+        return await replyOut(res, from, `✅ Semua ${list.length} reminder berhasil dibatalkan.`, isTwilio);
+      }
+
+      // 9) Intent: cancel (hanya recurring)
+      if (ai.intent === 'cancel') {
+        const list = await Reminder.findAll({
+          where: {
+            UserId: user.id,
+            status: 'scheduled',
+            repeat: { [Op.ne]: 'none' }
+          }
+        });
+        if (!list.length) {
+          return await replyOut(res, from, 'Tidak ada reminder berulang yang aktif 😊', isTwilio);
+        }
+        for (const r of list) {
+          r.status = 'cancelled';
+          await r.save();
+          cancelReminder(r.id);
+        }
+        session.set(from, { ...sess, lastList: [] });
+        return await replyOut(res, from, `✅ ${list.length} reminder berulang berhasil dibatalkan.`, isTwilio);
+      }
+
+      // 10) Need time (punya isi, belum waktu)
+      if (ai.intent === 'need_time' || (!ai.dueAtWIB && (ai.title || pendingTitle))) {
+        const title = ai.title || pendingTitle || (text || '').trim();
+        // simpan pending title
+        session.set(from, { ...sess, pendingTitle: title, pendingDueAtWIB: null });
+        const name = user.name || user.username || '';
+        const msg = ai.reply || `Siap ${name ? name + ',' : ''} untuk “${title}”. Kamu mau diingatkan kapan? Misal: "jam 20.00", "30 menit lagi", "besok 09.00" 😊`;
+        return await replyOut(res, from, msg, isTwilio);
+      }
+
+      // 11) Need content (punya waktu, belum isi) – contoh user balas “1 menit lagi”
+      if (ai.intent === 'need_content' || (!ai.title && (ai.dueAtWIB || pendingDueAtWIB))) {
+        // simpan pending dueAt
+        const dueAtWIB = ai.dueAtWIB || pendingDueAtWIB || null;
+        session.set(from, { ...sess, pendingTitle: pendingTitle || null, pendingDueAtWIB: dueAtWIB });
+
+        const msg = ai.reply || `Oke, jamnya sudah dapat. Kamu mau diingatkan tentang apa ya? Contoh: "minum obat", "beli kopi nescafe" 😊`;
+        return await replyOut(res, from, msg, isTwilio);
+      }
+
+      // 12) Create – lengkap
+      if (ai.intent === 'create' || (ai.dueAtWIB && (ai.title || pendingTitle))) {
+        const title = (ai.title || pendingTitle || '').trim();
+        if (!title) {
+          // tidak boleh kosong
+          session.set(from, { ...sess, pendingTitle: null, pendingDueAtWIB: null });
+          return await replyOut(res, from, 'Judul pengingatnya belum kebaca. Tulis pengingatnya ya (mis. "minum obat").', isTwilio);
+        }
+
+        // waktu
+        let dueWIB = null;
+        if (ai.dueAtWIB) {
+          dueWIB = DateTime.fromISO(ai.dueAtWIB).setZone(WIB_TZ);
+        } else if (pendingDueAtWIB) {
+          dueWIB = DateTime.fromISO(pendingDueAtWIB).setZone(WIB_TZ);
+        }
+
+        if (!dueWIB || !dueWIB.isValid) {
+          // minta jam lagi
+          session.set(from, { ...sess, pendingTitle: title, pendingDueAtWIB: null });
+          return await replyOut(res, from, `Aku belum nangkep jamnya. Untuk “${title}”, kamu mau diingatkan kapan? 😊`, isTwilio);
+        }
+
+        // kalau waktu sudah lewat, minta reschedule
+        if (dueWIB <= nowWIB) {
+          session.set(from, { ...sess, pendingTitle: title, pendingDueAtWIB: null });
+          return await replyOut(res, from, 'Waktunya sudah lewat nih 😅 Mau pilih waktu lain?', isTwilio);
+        }
+
+        // Simpan ke UTC
+        const dueUTC = dueWIB.toUTC().toJSDate();
+
+        const reminder = await Reminder.create({
+          UserId: user.id,
+          RecipientId: user.id,
+          title,
+          dueAt: dueUTC,
+          repeat: 'none',
+          status: 'scheduled',
+          formattedMessage: null
+        });
+
+        await scheduleReminder(reminder);
+
+        // bersihkan session pending
+        session.set(from, { ...sess, pendingTitle: null, pendingDueAtWIB: null });
+
+        const whenText = describeTime(dueWIB, nowWIB);
+        const name = user.name || user.username || 'kamu';
+        const confirm = ai.reply ||
+          `✅ Siap, ${name}! Aku akan ingatkan kamu untuk “${title}” ${whenText}.`;
+        return await replyOut(res, from, confirm, isTwilio);
+      }
+
+      // 13) potential_reminder / unknown – tanggapan hangat yang selalu membuka pintu reminder
+      {
+        const msg =
+          ai.reply ||
+          'Semangat ya! Kalau kamu butuh pengingat biar nggak lupa hal penting, bilang aja—aku siap bantu 😊';
+        // simpan tidak mengganggu context
+        return await replyOut(res, from, msg, isTwilio);
+      }
     } catch (err) {
       console.error('[WA Controller] Fatal error:', err);
-      if (req && req.body && req.body.From && req.body.Body) {
-        try {
-          await sendMessage(req.body.From.replace('whatsapp:', ''), 'Maaf, bisa dijelaskan lagi ya? 🙂', null);
-        } catch (_) {}
-        return sendResponseTwilio(res, '');
+      try {
+        // fallback balasan agar user tetap dapat respons
+        return await replyOut(res, (req.body?.From || '').replace('whatsapp:', ''), 'Maaf, bisa dijelaskan lagi ya? 🙂', !!(req.body && req.body.From && req.body.Body));
+      } catch (_) {
+        return res.status(500).json({ message: 'Internal server error' });
       }
-      return res.status(500).json({ error: 'Internal server error' });
     }
-  },
+  }
 };
