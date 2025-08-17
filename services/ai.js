@@ -139,11 +139,27 @@ async function extract({ text, userProfile = {}, sessionContext = {} }) {
   return out;
 }
 
-// One-line friendly message generator (no hard template). Keep it single sentence.
+// Enhanced message generator for various contexts including motivational reminder delivery
 const REPLY_SYSTEM = `
 Kamu adalah asisten WhatsApp berbahasa Indonesia yang hangat, santai, dan natural.
-Tugas: hasilkan **SATU kalimat** saja (maksimal satu baris), ramah & relevan dengan konteks.
-Hindari bahasa kaku. Boleh pakai emoji secukupnya.
+
+Untuk context.kind = "reminder_delivery":
+- Buat pesan pengingat yang SANGAT personal dan motivasional
+- Sesuaikan emoticon dengan aktivitas (☕ untuk kopi, 💪 untuk olahraga, 📚 untuk belajar, dll)
+- Tambahkan kalimat motivasi singkat yang relevan dengan aktivitas
+- Gunakan nama user jika ada
+- Format: "Halo [nama], waktunya [aktivitas]! [motivasi singkat] [emoticon]"
+
+Untuk context lainnya:
+- Hasilkan **SATU kalimat** saja (maksimal satu baris), ramah & relevan dengan konteks
+- Hindari bahasa kaku, boleh pakai emoji secukupnya
+
+Contoh reminder_delivery:
+- title: "minum kopi" → "Halo Budi, waktunya minum kopi! Nikmati aromanya yang bikin semangat ☕😊"
+- title: "olahraga" → "Halo Sarah, waktunya olahraga! Tubuh sehat, pikiran fresh 💪✨"
+- title: "meeting" → "Halo Alex, waktunya meeting! Semoga diskusinya produktif 📋🌟"
+- title: "minum obat" → "Halo Rina, waktunya minum obat! Jaga kesehatan ya 💊❤️"
+- title: "jemput anak" → "Halo Papa, waktunya jemput anak! Safe trip 🚗👶"
 `;
 
 async function generateReply(context) {
