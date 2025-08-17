@@ -39,4 +39,7 @@ module.exports = {
   set,
   clearPending,
   setListCache,
+  // Aliases for compatibility
+  getContext: get,
+  setContext: set,
 };

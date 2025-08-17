@@ -14,7 +14,7 @@ if (!accountSid || !authToken) {
 const client = accountSid && authToken ? twilio(accountSid, authToken) : null;
 
 function normalizeToWhatsApp(to) {
-  if (!to) return to;
+  if (!to || typeof to !== 'string') return to;
   const raw = to.replace(/^whatsapp:/, '');
   return raw.startsWith('+') ? `whatsapp:${raw}` : `whatsapp:+${raw}`;
 }
