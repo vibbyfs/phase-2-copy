@@ -1,5 +1,7 @@
-// /services/waOutbound.js  (ESM)
-import Twilio from 'twilio';
+// /services/waOutbound.js  (CommonJS)
+'use strict';
+
+const Twilio = require('twilio');
 
 const {
   TWILIO_ACCOUNT_SID = '',
@@ -30,7 +32,7 @@ function normalizeWhatsApp(to) {
  * @param {number|null} reminderId - optional, untuk logging
  * @returns {Promise<{sid:string,to:string,from:string,reminderId:number|null,status:string}>}
  */
-export async function sendReminder(to, text, reminderId = null) {
+async function sendReminder(to, text, reminderId = null) {
   if (!client) {
     console.error('[WAOutbound] Twilio client belum tersedia. Cek credentials env.');
     throw new Error('Twilio not configured');
@@ -58,8 +60,8 @@ export async function sendReminder(to, text, reminderId = null) {
 }
 
 /** Alias untuk backward-compat (beberapa modul lama pakai sendMessage) */
-export async function sendMessage(to, text, reminderId = null) {
+async function sendMessage(to, text, reminderId = null) {
   return sendReminder(to, text, reminderId);
 }
 
-export default { sendReminder, sendMessage };
+module.exports = { sendReminder, sendMessage };

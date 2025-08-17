@@ -1,96 +1,87 @@
-import schedule from "node-schedule";
-import { sendMessage } from "./waOutbound.js";
+// /services/scheduler.js  (CommonJS)
+'use strict';
 
-/**
- * Simpan jadwal reminder yang aktif
- * Struktur: { [userId]: [ { job, activity, time } ] }
- */
-const reminders = {};
+const { DateTime } = require('luxon');
+const { Reminder, User } = require('../models');
+const { sendReminder } = require('./waOutbound');
 
-/**
- * Format waktu untuk ditampilkan ke user
- */
-function formatDateTime(date) {
-  return new Intl.DateTimeFormat("id-ID", {
-    dateStyle: "full",
-    timeStyle: "short",
-  }).format(date);
-}
+const WIB_TZ = 'Asia/Jakarta';
+const jobs = new Map(); // reminderId -> timeout
 
-/**
- * Buat jadwal reminder
- */
-export async function scheduleReminder(user, activity, time) {
-  if (!user || !user.phone) {
-    throw new Error("User tidak valid untuk membuat pengingat.");
+function clearJob(reminderId) {
+  const t = jobs.get(reminderId);
+  if (t) {
+    clearTimeout(t);
+    jobs.delete(reminderId);
   }
+}
 
-  let reminderTime;
+/** Hitung due berikutnya untuk recurring */
+function nextDue(dueAt, repeat) {
+  const d = DateTime.fromJSDate(dueAt).setZone(WIB_TZ);
+  if (repeat === 'hourly') return d.plus({ hours: 1 }).toJSDate();
+  if (repeat === 'daily') return d.plus({ days: 1 }).toJSDate();
+  if (repeat === 'weekly') return d.plus({ weeks: 1 }).toJSDate();
+  if (repeat === 'monthly') return d.plus({ months: 1 }).toJSDate();
+  return null;
+}
 
-  if (typeof time === "string" || typeof time === "number") {
-    // Bisa berupa "in 5 minutes" atau timestamp
-    reminderTime = new Date(time);
-  } else if (time instanceof Date) {
-    reminderTime = time;
-  } else {
-    throw new Error("Format waktu tidak dikenali.");
+/** Jadwalkan reminder (single atau recurring) */
+function scheduleReminder(reminder) {
+  try {
+    clearJob(reminder.id);
+    const now = DateTime.utc();
+    const due = DateTime.fromJSDate(reminder.dueAt).toUTC();
+    let delay = Math.max(0, due.diff(now, 'milliseconds').milliseconds);
+
+    console.log('[SCHED] create job', { id: reminder.id, runAt: reminder.dueAt.toISOString() });
+
+    const t = setTimeout(async () => {
+      try {
+        console.log('[SCHED] fire job', { id: reminder.id, at: new Date().toISOString() });
+
+        // Ambil penerima
+        const recipient = await User.findByPk(reminder.RecipientId);
+        if (!recipient) {
+          console.warn('[SCHED] recipient not found for reminder', reminder.id);
+        } else {
+          const phone = recipient.phone;
+          await sendReminder(phone, reminder.formattedMessage || `Halo ${recipient.name || 'kamu'}, ini pengingatmu untuk '${reminder.title}'.`, reminder.id);
+        }
+
+        // Update status / reschedule jika recurring
+        if (reminder.repeat && reminder.repeat !== 'none') {
+          const next = nextDue(reminder.dueAt, reminder.repeat);
+          if (next) {
+            reminder.dueAt = next;
+            await reminder.save();
+            scheduleReminder(reminder); // recursive re-schedule
+          } else {
+            reminder.status = 'sent';
+            await reminder.save();
+            clearJob(reminder.id);
+          }
+        } else {
+          reminder.status = 'sent';
+          await reminder.save();
+          clearJob(reminder.id);
+        }
+      } catch (err) {
+        console.error('[SCHED] error firing job', reminder.id, err);
+        clearJob(reminder.id);
+      }
+    }, delay);
+
+    jobs.set(reminder.id, t);
+  } catch (err) {
+    console.error('[SCHED] schedule error', err);
   }
-
-  if (reminderTime < new Date()) {
-    throw new Error("Waktu pengingat sudah lewat.");
-  }
-
-  // Buat job baru
-  const job = schedule.scheduleJob(reminderTime, async () => {
-    try {
-      const message = `🔔 Hai ${user.username || "teman"}! Ini pengingatmu untuk *${activity}* sekarang. Semangat ya! ✨`;
-      await sendMessage(user.phone, message);
-    } catch (err) {
-      console.error("[Scheduler] Gagal kirim pengingat:", err);
-    }
-  });
-
-  // Simpan job ke daftar reminders
-  if (!reminders[user.id]) reminders[user.id] = [];
-  reminders[user.id].push({ job, activity, time: reminderTime });
-
-  console.log(
-    `[Scheduler] Reminder dibuat: ${activity} untuk ${user.phone} pada ${reminderTime}`
-  );
-
-  return {
-    activity,
-    time: formatDateTime(reminderTime),
-  };
 }
 
-/**
- * Lihat semua reminder aktif untuk user
- */
-export function listReminders(userId) {
-  return reminders[userId] || [];
+/** Batalkan reminder terjadwal */
+function cancelReminder(reminderId) {
+  clearJob(reminderId);
+  console.log('[SCHED] cancel job', { id: reminderId });
 }
 
-/**
- * Batalkan reminder tertentu
- */
-export function cancelReminder(userId, activity) {
-  if (!reminders[userId]) return false;
-  reminders[userId] = reminders[userId].filter((rem) => {
-    if (rem.activity === activity) {
-      rem.job.cancel();
-      return false;
-    }
-    return true;
-  });
-  return true;
-}
-
-/**
- * Batalkan semua reminder user
- */
-export function cancelAllReminders(userId) {
-  if (!reminders[userId]) return;
-  reminders[userId].forEach((rem) => rem.job.cancel());
-  reminders[userId] = [];
-}
+module.exports = { scheduleReminder, cancelReminder };
