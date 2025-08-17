@@ -151,17 +151,93 @@ async function inbound(req, res, next) {
     }
 
     // Reminder creation flows
-    if (parsed.intent === 'create' && parsed.dueAtWIB && parsed.title) {
-      const dueAtUTC = parseISOToUTC(parsed.dueAtWIB);
-      if (!dueAtUTC) {
-        await replyToUser('Jamnya belum kebaca dengan jelas nih 😅 Kamu mau diingatkan jam berapa?');
+    if (parsed.intent === 'create' && parsed.title) {
+      
+      // Handle repeat reminders without specific start time
+      if (parsed.repeat !== 'none' && !parsed.dueAtWIB) {
+        // For repeat reminders, start immediately or use default timing
+        let startTime = new Date();
+        
+        if (parsed.repeat === 'minutes' || parsed.repeat === 'hours') {
+          // Start immediately for frequent repeats
+          startTime = new Date(Date.now() + 60000); // Start in 1 minute
+        } else {
+          // For daily/weekly/monthly, need time of day
+          if (!parsed.repeatDetails?.timeOfDay) {
+            await replyToUser('Untuk reminder harian/mingguan/bulanan, kamu mau diingatkan jam berapa? 😊');
+            return res.status(200).json({ ok: true });
+          }
+          
+          // Set time for today or next occurrence
+          const [hours, minutes] = (parsed.repeatDetails.timeOfDay || '09:00').split(':');
+          startTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+          
+          // If time has passed today, schedule for next occurrence
+          if (startTime <= new Date()) {
+            switch (parsed.repeat) {
+              case 'daily':
+                startTime.setDate(startTime.getDate() + 1);
+                break;
+              case 'weekly':
+                startTime.setDate(startTime.getDate() + 7);
+                break;
+              case 'monthly':
+                startTime.setMonth(startTime.getMonth() + 1);
+                break;
+            }
+          }
+        }
+        
+        const dueAtUTC = startTime;
+        
+        // Generate formatted message for reminder using AI
+        const formattedMessage = await ai.generateReply({
+          kind: 'reminder_delivery',
+          username,
+          title: parsed.title.trim(),
+          context: 'Generate a warm, motivational reminder message in Indonesian with relevant emoticons based on the activity.'
+        });
+
+        const finalFormattedMessage = formattedMessage || 
+          `Halo ${username}, waktunya ${parsed.title.trim()}! 😊`;
+
+        const reminder = await Reminder.create({
+          UserId: user.id,
+          RecipientId: user.id,
+          title: parsed.title.trim(),
+          dueAt: dueAtUTC,
+          repeat: parsed.repeat || 'none',
+          repeatType: parsed.repeat || 'once',
+          repeatInterval: parsed.repeatDetails?.interval || null,
+          repeatEndDate: parsed.repeatDetails?.endDate ? new Date(parsed.repeatDetails.endDate) : null,
+          isRecurring: parsed.repeat !== 'none',
+          status: 'scheduled',
+          formattedMessage: finalFormattedMessage
+        });
+        
+        await scheduleReminder(reminder);
+        sessionStore.setContext(fromPhone, { lastListedIds: [] });
+
+        const intervalText = parsed.repeatDetails?.interval 
+          ? `setiap ${parsed.repeatDetails.interval} ${parsed.repeat === 'minutes' ? 'menit' : 'jam'}`
+          : `setiap ${parsed.repeat === 'daily' ? 'hari' : parsed.repeat === 'weekly' ? 'minggu' : 'bulan'}`;
+          
+        await replyToUser(`✅ Siap! Aku akan mengingatkan kamu "${parsed.title}" ${intervalText}. 😊`);
         return res.status(200).json({ ok: true });
       }
-      // prevent past
-      if (dayjs(dueAtUTC).isBefore(dayjs())) {
-        await replyToUser('Waktunya sudah lewat nih 😅 Mau pilih waktu lain?');
-        return res.status(200).json({ ok: true });
-      }
+      
+      // Handle regular reminders with specific time
+      if (parsed.dueAtWIB) {
+        const dueAtUTC = parseISOToUTC(parsed.dueAtWIB);
+        if (!dueAtUTC) {
+          await replyToUser('Jamnya belum kebaca dengan jelas nih 😅 Kamu mau diingatkan jam berapa?');
+          return res.status(200).json({ ok: true });
+        }
+        // prevent past
+        if (dayjs(dueAtUTC).isBefore(dayjs())) {
+          await replyToUser('Waktunya sudah lewat nih 😅 Mau pilih waktu lain?');
+          return res.status(200).json({ ok: true });
+        }
 
       // Generate formatted message for reminder using AI
       const formattedMessage = await ai.generateReply({
