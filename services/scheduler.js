@@ -146,11 +146,19 @@ function scheduleReminder(reminder) {
     }
 
     const diff = runAt.getTime() - Date.now();
+    
+    console.log(`[SCHED] Schedule check - reminderId: ${reminder.id}, runAt: ${runAt.toISOString()}, now: ${new Date().toISOString()}, diff: ${diff}ms`);
 
-    // Kirim instan bila sangat dekat (<= 2s) atau sudah lewat tipis
-    if (diff <= 2000) {
-      console.log('[SCHED] fire immediate', { id: reminder.id, at: runAt.toISOString(), atWIB: wibTs(runAt) });
-      setTimeout(() => fireReminder(reminder.id), Math.max(0, diff));
+    // Only fire immediately if genuinely overdue by a small margin (max 30 seconds)
+    if (diff <= 0 && diff >= -30000) {
+      console.log('[SCHED] fire immediate (slightly overdue)', { id: reminder.id, at: runAt.toISOString(), atWIB: wibTs(runAt) });
+      setTimeout(() => fireReminder(reminder.id), 100);
+      return;
+    }
+    
+    // Don't schedule anything that's way overdue
+    if (diff < -30000) {
+      console.log('[SCHED] skip overdue reminder', { id: reminder.id, at: runAt.toISOString(), overdue: Math.abs(diff) });
       return;
     }
 
@@ -195,11 +203,16 @@ async function loadAllScheduledReminders() {
       const runAt = new Date(r.dueAt);
       if (Number.isNaN(runAt.getTime())) continue;
 
-      if (runAt.getTime() <= now) {
-        console.log('[SCHED] backfill fire', { id: r.id, at: runAt.toISOString(), atWIB: wibTs(runAt) });
+      const diff = runAt.getTime() - now;
+      
+      // Only backfill if slightly overdue (max 5 minutes)
+      if (diff <= 0 && diff >= -5 * 60 * 1000) {
+        console.log('[SCHED] backfill fire', { id: r.id, at: runAt.toISOString(), atWIB: wibTs(runAt), overdue: Math.abs(diff) });
         setTimeout(() => fireReminder(r.id), 100);
-      } else {
+      } else if (diff > 0) {
         scheduleReminder(r);
+      } else {
+        console.log('[SCHED] skip old reminder', { id: r.id, at: runAt.toISOString(), overdue: Math.abs(diff) });
       }
     }
 

@@ -98,24 +98,36 @@ async function inbound(req, res) {
             return res.status(200).json({ ok: true });
           }
           
-          // Set time for today or next occurrence
+          // Parse time in WIB timezone properly
           const [hours, minutes] = (parsed.repeatDetails.timeOfDay || '09:00').split(':');
-          startTime.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+          const now = new Date();
           
-          // If time has passed today, schedule for next occurrence
-          if (startTime <= new Date()) {
+          // Create target time in WIB today
+          const targetTimeWIB = new Date(now.toLocaleString("en-US", {timeZone: "Asia/Jakarta"}));
+          targetTimeWIB.setHours(parseInt(hours), parseInt(minutes), 0, 0);
+          
+          // Convert to UTC for storage
+          const targetTimeUTC = new Date(targetTimeWIB.getTime() - (7 * 60 * 60 * 1000)); // WIB to UTC
+          
+          console.log(`[WA Controller] Daily reminder - timeOfDay: ${parsed.repeatDetails.timeOfDay}, targetWIB: ${targetTimeWIB.toISOString()}, targetUTC: ${targetTimeUTC.toISOString()}, now: ${now.toISOString()}`);
+          
+          // If time has passed today, schedule for tomorrow
+          if (targetTimeUTC <= now) {
             switch (parsed.repeat) {
               case 'daily':
-                startTime.setDate(startTime.getDate() + 1);
+                targetTimeUTC.setDate(targetTimeUTC.getDate() + 1);
                 break;
               case 'weekly':
-                startTime.setDate(startTime.getDate() + 7);
+                targetTimeUTC.setDate(targetTimeUTC.getDate() + 7);
                 break;
               case 'monthly':
-                startTime.setMonth(startTime.getMonth() + 1);
+                targetTimeUTC.setMonth(targetTimeUTC.getMonth() + 1);
                 break;
             }
+            console.log(`[WA Controller] Time passed, moved to next occurrence: ${targetTimeUTC.toISOString()}`);
           }
+          
+          startTime = targetTimeUTC;
         }
         
         const dueAtUTC = startTime;
