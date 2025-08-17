@@ -20,14 +20,7 @@ app.use('/api/friends', authentication, require('./routes/friends.routes'));
 app.use('/api/wa', require('./routes/wa.routes'));
 
 
-(async () => {
-  try {
-    await loadAllScheduledReminders();
-  } catch (e) {
-    console.error('Scheduler init error', e);
-  }
-})();
-
+loadAllScheduledReminders();
 
 app.use(erroHandler)
 
