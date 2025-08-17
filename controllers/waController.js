@@ -2,7 +2,45 @@
 const { User, Reminder } = require('../models');
 const { scheduleReminder, cancelReminder } = require('../services/scheduler');
 const sessionStore = require('../services/session');
-const { sendMessage } = require('../services/waOutbound');
+const      const finalFormattedMessage = formattedMessage || 
+        `Halo ${username}, waktunya ${parsed.title.trim()}! 😊`;
+
+      // Map AI's repeat values to database enum values for regular reminders
+      let dbRepeat = 'none';
+      let dbRepeatType = 'once';
+      
+      if (parsed.repeat && parsed.repeat !== 'none') {
+        if (parsed.repeat === 'minutes') {
+          dbRepeat = 'none'; // Frequent repeats use none for legacy repeat field
+          dbRepeatType = 'minutes';
+        } else if (parsed.repeat === 'hours') {
+          dbRepeat = 'hourly';
+          dbRepeatType = 'hours';
+        } else if (parsed.repeat === 'daily') {
+          dbRepeat = 'daily';
+          dbRepeatType = 'daily';
+        } else if (parsed.repeat === 'weekly') {
+          dbRepeat = 'weekly';
+          dbRepeatType = 'weekly';
+        } else if (parsed.repeat === 'monthly') {
+          dbRepeat = 'monthly';
+          dbRepeatType = 'monthly';
+        }
+      }
+
+      const reminder = await Reminder.create({
+        UserId: user.id,
+        RecipientId: user.id,
+        title: parsed.title.trim(),
+        dueAt: dueAtUTC,
+        repeat: dbRepeat,
+        repeatType: dbRepeatType,
+        repeatInterval: parsed.repeatDetails?.interval || null,
+        repeatEndDate: parsed.repeatDetails?.endDate ? new Date(parsed.repeatDetails.endDate) : null,
+        isRecurring: parsed.repeat !== 'none',
+        status: 'scheduled',
+        formattedMessage: finalFormattedMessage
+      }); = require('../services/waOutbound');
 const ai = require('../services/ai');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
@@ -201,13 +239,34 @@ async function inbound(req, res, next) {
         const finalFormattedMessage = formattedMessage || 
           `Halo ${username}, waktunya ${parsed.title.trim()}! 😊`;
 
+        // Map AI's repeat values to database enum values
+        let dbRepeat = 'none';
+        let dbRepeatType = 'once';
+        
+        if (parsed.repeat === 'minutes') {
+          dbRepeat = 'none'; // Frequent repeats use none for legacy repeat field
+          dbRepeatType = 'minutes';
+        } else if (parsed.repeat === 'hours') {
+          dbRepeat = 'hourly';
+          dbRepeatType = 'hours';
+        } else if (parsed.repeat === 'daily') {
+          dbRepeat = 'daily';
+          dbRepeatType = 'daily';
+        } else if (parsed.repeat === 'weekly') {
+          dbRepeat = 'weekly';
+          dbRepeatType = 'weekly';
+        } else if (parsed.repeat === 'monthly') {
+          dbRepeat = 'monthly';
+          dbRepeatType = 'monthly';
+        }
+
         const reminder = await Reminder.create({
           UserId: user.id,
           RecipientId: user.id,
           title: parsed.title.trim(),
           dueAt: dueAtUTC,
-          repeat: parsed.repeat || 'none',
-          repeatType: parsed.repeat || 'once',
+          repeat: dbRepeat,
+          repeatType: dbRepeatType,
           repeatInterval: parsed.repeatDetails?.interval || null,
           repeatEndDate: parsed.repeatDetails?.endDate ? new Date(parsed.repeatDetails.endDate) : null,
           isRecurring: parsed.repeat !== 'none',
