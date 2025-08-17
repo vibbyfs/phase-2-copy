@@ -14,7 +14,9 @@ dayjs.extend(tz);
 function parseISOToUTC(isoString) {
   if (!isoString) return null;
   try {
-    const dt = dayjs.tz(isoString, 'Asia/Jakarta');
+    // Parse ISO string directly (already has timezone info)
+    const dt = dayjs(isoString);
+    console.log(`[parseISOToUTC] Input: ${isoString}, Parsed: ${dt.toISOString()}, UTC: ${dt.utc().toISOString()}`);
     return dt.utc().toDate();
   } catch (err) {
     console.error('[parseISOToUTC] Invalid date:', isoString, err.message);
@@ -25,8 +27,9 @@ function parseISOToUTC(isoString) {
 function humanWhen(isoString) {
   if (!isoString) return null;
   try {
-    const dt = dayjs.tz(isoString, 'Asia/Jakarta');
-    const now = dayjs.tz('Asia/Jakarta');
+    // Parse ISO string and convert to Jakarta timezone for display
+    const dt = dayjs(isoString).tz('Asia/Jakarta');
+    const now = dayjs().tz('Asia/Jakarta');
     const diffInMinutes = dt.diff(now, 'minute');
     
     if (diffInMinutes < 1) return 'sekarang';
