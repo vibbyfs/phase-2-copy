@@ -70,10 +70,10 @@ async function inbound(req, res) {
     const ctx = sessionStore.getContext(fromPhone) || {};
 
     // Get AI response
-    const parsed = await ai.parseMessage({
+    const parsed = await ai.extract({
       text,
-      username,
-      context: ctx
+      userProfile: { username },
+      sessionContext: ctx
     });
 
     console.log('[WA] AI parsed:', parsed);
