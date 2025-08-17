@@ -73,7 +73,7 @@ Aturan penting:
 - Jika pesan hanya isi (contoh "minum obat") tanpa waktu, intent = "need_time".
 - Jika keduanya ada, intent = "create".
 - Jika mulai dengan "--reminder <keyword>", intent = "cancel_keyword", cancelKeyword=keyword.
-- Jika format "stop (N)", intent = "stop_number", stopNumber=N.
+- Jika format "stop (N)" atau "batal (N)" atau hanya angka setelah list reminder, intent = "stop_number", stopNumber=N.
 - Jika "list" => intent = "list".
 - Waktu:
   - Pahami: "1/2/5/15 menit lagi", "jam 20.00", "20:30", "besok jam 2 siang", "rabu depan jam 3", "lusa", "pagi/siang/sore/malam".

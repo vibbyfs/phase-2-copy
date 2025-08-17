@@ -44,8 +44,32 @@ async function inbound(req, res, next) {
     // load session context
     const ctx = sessionStore.getContext(fromPhone) || {};
 
-    // run AI extraction
-    const parsed = await ai.extract({
+    // Fallback pattern matching for stop commands (before AI)
+    let fallbackParsed = null;
+    const stopPatterns = [
+      { pattern: /stop\s*\(\s*(\d+)\s*\)/i, intent: 'stop_number' },
+      { pattern: /batal\s*\(\s*(\d+)\s*\)/i, intent: 'stop_number' },
+      { pattern: /^\s*(\d+)\s*$/, intent: 'stop_number' } // just number after list
+    ];
+    
+    for (const { pattern, intent } of stopPatterns) {
+      const match = text.match(pattern);
+      if (match && intent === 'stop_number') {
+        const number = parseInt(match[1]);
+        if (number >= 1 && number <= 10) { // reasonable range
+          fallbackParsed = {
+            intent: 'stop_number',
+            stopNumber: number,
+            conversationalResponse: `Membatalkan reminder nomor ${number}...`
+          };
+          console.log('[WA] Fallback detected stop pattern:', text, '→', fallbackParsed);
+          break;
+        }
+      }
+    }
+
+    // run AI extraction (unless fallback already handled it)
+    const parsed = fallbackParsed || await ai.extract({
       text,
       userProfile: { username },
       sessionContext: ctx
@@ -79,7 +103,7 @@ async function inbound(req, res, next) {
         const hm = dayjs(wib).format('ddd, DD/MM HH.mm');
         return `${i+1}. ${r.title} — ${hm} WIB`;
       });
-      lines.push('Ketik: `stop (1)` untuk membatalkan salah satunya.');
+      lines.push('Ketik: Nomor Reminder Aktif untuk membatalkan salah satunya.');
       await replyToUser(`Berikut pengingat aktif terkait "${parsed.cancelKeyword}":\n` + lines.join('\n'));
       return res.status(200).json({ ok: true });
     }
@@ -121,7 +145,7 @@ async function inbound(req, res, next) {
         const hm = dayjs(wib).format('ddd, DD/MM HH.mm');
         return `${i+1}. ${r.title} — ${hm} WIB`;
       });
-      lines.push('Ketik: `stop (1)` untuk membatalkan salah satu. Atau filter: `--reminder <kata>`');
+      lines.push('Ketik: Nomor Reminder Aktif untuk membatalkan salah satu. Atau filter: `--reminder <kata>`');
       await replyToUser('Daftar reminder aktif:\n' + lines.join('\n'));
       return res.status(200).json({ ok: true });
     }
