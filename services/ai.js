@@ -53,7 +53,7 @@ Skema:
 {
   "intent": "unknown" | "potential_reminder" | "need_time" | "need_content" | "create" | "cancel_keyword" | "stop_number" | "list",
   "title": string | null,                         // isi pengingat (mis. "makan siang")
-  "recipientUsernames": string[],                 // jika menyebut nama teman
+  "recipientUsernames": string[],                 // extract @username mentions (tanpa @)
   "timeType": "relative" | "absolute",            // jenis waktu bila ada
   "dueAtWIB": string | null,                      // ISO 8601 Asia/Jakarta (contoh "2025-08-17T14:00:00+07:00")
   "repeat": "none" | "minutes" | "hours" | "daily" | "weekly" | "monthly" | "yearly",
@@ -72,6 +72,8 @@ Skema:
 
 Aturan penting:
 - Deteksi niat pembuatan pengingat walau tanpa kata "ingatkan" (contoh: "jemput John nanti", "aku suka lupa minum air", "semoga gak lupa jemput John").
+- Extract @username mentions ke recipientUsernames (hapus @, ambil username saja).
+- Jika ada @username, tetap extract title dari sisa pesan setelah hapus mentions.
 - Jika pesan hanya waktu (contoh "2 menit lagi") tanpa isi, intent = "need_content".
 - Jika pesan hanya isi (contoh "minum obat") tanpa waktu, intent = "need_time".
 - Jika keduanya ada, intent = "create".

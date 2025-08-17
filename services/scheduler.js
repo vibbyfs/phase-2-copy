@@ -1,7 +1,7 @@
 // services/scheduler.js
 const schedule = require('node-schedule');
 const { Op } = require('sequelize');             
-const { User, Reminder } = require('../models');
+const { User, Reminder, ReminderRecipient } = require('../models');
 const { sendMessage } = require('./waOutbound');
 const ai = require('./ai');
 
@@ -18,36 +18,98 @@ function wibTs(date) {
 
 async function fireReminder(reminderId) {
   try {
-    const reminder = await Reminder.findByPk(reminderId);
+    const reminder = await Reminder.findByPk(reminderId, {
+      include: [
+        {
+          model: User,
+          as: 'user',
+          attributes: ['id', 'username', 'phone']
+        },
+        {
+          model: ReminderRecipient,
+          as: 'reminderRecipients',
+          where: { status: 'scheduled' },
+          required: false,
+          include: [
+            {
+              model: User,
+              as: 'recipient',
+              attributes: ['id', 'username', 'phone']
+            }
+          ]
+        }
+      ]
+    });
+
     if (!reminder || reminder.status !== 'scheduled') return;
 
-    const user = await User.findByPk(reminder.RecipientId || reminder.UserId);
-    if (!user || !user.phone) return;
-
-    const to = String(user.phone); // pastikan string
     const title = reminder.title || 'pengingat';
-    
-    // Use formattedMessage from database if available, otherwise generate with AI
-    let msg = reminder.formattedMessage;
-    if (!msg || msg.trim() === '') {
-      // Generate message using AI if not stored
-      try {
-        const generatedMsg = await ai.generateReply({
-          kind: 'reminder_delivery',
-          username: user.username,
-          title: title,
-          context: 'Generate a warm, motivational reminder message in Indonesian with relevant emoticons'
-        });
-        msg = generatedMsg || `Halo ${user.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
-      } catch (aiError) {
-        console.error('[SCHED] AI generate message error:', aiError);
-        msg = `Halo ${user.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
+    let sentCount = 0;
+
+    // Check if this is a multi-recipient reminder
+    if (reminder.reminderRecipients && reminder.reminderRecipients.length > 0) {
+      // Multi-recipient reminder
+      for (const reminderRecipient of reminder.reminderRecipients) {
+        try {
+          const recipient = reminderRecipient.recipient;
+          if (!recipient || !recipient.phone) continue;
+
+          const to = String(recipient.phone);
+          const msg = reminder.formattedMessage || 
+            `Halo ${recipient.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
+
+          await sendMessage(to, msg, reminder.id);
+          
+          // Update specific ReminderRecipient status
+          await ReminderRecipient.update(
+            { status: 'sent', sentAt: new Date() },
+            { where: { id: reminderRecipient.id } }
+          );
+          
+          sentCount++;
+          console.log(`[SCHED] Sent multi-recipient reminder to ${recipient.username}: ${title}`);
+        } catch (sendError) {
+          console.error(`[SCHED] Failed to send to recipient ${reminderRecipient.RecipientId}:`, sendError);
+          
+          // Mark this specific recipient as failed but don't stop the whole process
+          await ReminderRecipient.update(
+            { status: 'cancelled' },
+            { where: { id: reminderRecipient.id } }
+          );
+        }
       }
+    } else {
+      // Single recipient reminder (legacy mode)
+      const user = await User.findByPk(reminder.RecipientId || reminder.UserId);
+      if (!user || !user.phone) return;
+
+      const to = String(user.phone);
+      
+      // Use formattedMessage from database if available, otherwise generate with AI
+      let msg = reminder.formattedMessage;
+      if (!msg || msg.trim() === '') {
+        try {
+          const generatedMsg = await ai.generateReply({
+            kind: 'reminder_delivery',
+            username: user.username,
+            title: title,
+            context: 'Generate a warm, motivational reminder message in Indonesian with relevant emoticons'
+          });
+          msg = generatedMsg || `Halo ${user.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
+        } catch (aiError) {
+          console.error('[SCHED] AI generate message error:', aiError);
+          msg = `Halo ${user.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
+        }
+      }
+
+      await sendMessage(to, msg, reminder.id);
+      sentCount = 1;
     }
 
-    await sendMessage(to, msg, reminder.id);
-
+    // Update main reminder status
     await Reminder.update({ status: 'sent' }, { where: { id: reminder.id } });
+
+    console.log(`[SCHED] Successfully fired reminder ${reminderId} to ${sentCount} recipient(s)`);
 
     // Check if this is a recurring reminder
     if (reminder.isRecurring && reminder.repeatType !== 'once') {
@@ -59,7 +121,8 @@ async function fireReminder(reminderId) {
           content: reminder.content,
           dueAt: nextDate,
           UserId: reminder.UserId,
-          RecipientId: reminder.RecipientId,
+          RecipientId: reminder.RecipientId, // Keep for legacy compatibility
+          repeat: reminder.repeat,
           repeatType: reminder.repeatType,
           repeatInterval: reminder.repeatInterval,
           repeatEndDate: reminder.repeatEndDate,
@@ -68,6 +131,18 @@ async function fireReminder(reminderId) {
           status: 'scheduled',
           formattedMessage: reminder.formattedMessage
         });
+
+        // Copy ReminderRecipients for next occurrence if multi-recipient
+        if (reminder.reminderRecipients && reminder.reminderRecipients.length > 0) {
+          const nextRecipientData = reminder.reminderRecipients.map(rr => ({
+            ReminderId: nextReminder.id,
+            RecipientId: rr.RecipientId,
+            status: 'scheduled'
+          }));
+          
+          await ReminderRecipient.bulkCreate(nextRecipientData);
+          console.log(`[SCHED] Created ${nextRecipientData.length} recipients for next occurrence`);
+        }
         
         console.log('[SCHED] created next occurrence', { 
           originalId: reminder.id, 

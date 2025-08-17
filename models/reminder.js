@@ -4,7 +4,43 @@ const {
 } = require('sequelize');
 module.exports = (sequelize, DataTypes) => {
   class Reminder extends Model {
+    static associate(models) {
+      // Define associations here
+      Reminder.belongsTo(models.User, {
+        foreignKey: 'UserId',
+        as: 'user'
+      });
+      
+      Reminder.belongsTo(models.User, {
+        foreignKey: 'RecipientId',
+        as: 'recipient'
+      });
 
+      // Many-to-Many relationship with Users through ReminderRecipients
+      Reminder.hasMany(models.ReminderRecipient, {
+        foreignKey: 'ReminderId',
+        as: 'reminderRecipients'
+      });
+
+      // Convenient method to get all recipients
+      Reminder.belongsToMany(models.User, {
+        through: models.ReminderRecipient,
+        foreignKey: 'ReminderId',
+        otherKey: 'RecipientId',
+        as: 'recipients'
+      });
+
+      // Parent-child relationship for recurring reminders
+      Reminder.belongsTo(models.Reminder, {
+        foreignKey: 'parentReminderId',
+        as: 'parentReminder'
+      });
+
+      Reminder.hasMany(models.Reminder, {
+        foreignKey: 'parentReminderId',
+        as: 'childReminders'
+      });
+    }
   }
   Reminder.init({
     UserId: {

@@ -1,9 +1,15 @@
 // controllers/waController.js - CommonJS, Twilio outbound, conversational flow
-const { User, Reminder } = require('../models');
+const { User, Reminder, ReminderRecipient } = require('../models');
 const { scheduleReminder, cancelReminder } = require('../services/scheduler');
 const sessionStore = require('../services/session');
 const { sendMessage } = require('../services/waOutbound');
 const ai = require('../services/ai');
+const { 
+  parseUsernamesFromMessage, 
+  validateAndGetRecipients, 
+  generateMultiRecipientMessage,
+  checkRecipientPermissions 
+} = require('../helpers/multiRecipient');
 const dayjs = require('dayjs');
 const utc = require('dayjs/plugin/utc');
 const tz = require('dayjs/plugin/timezone');
@@ -84,6 +90,30 @@ async function inbound(req, res) {
     // Handle different intents
     if (parsed.intent === 'create' && parsed.title) {
       
+      // Process @username mentions if any
+      let recipientUsers = [];
+      let validationErrors = [];
+      
+      if (parsed.recipientUsernames && parsed.recipientUsernames.length > 0) {
+        console.log('[WA] Processing recipients:', parsed.recipientUsernames);
+        
+        const validation = await validateAndGetRecipients(user.id, parsed.recipientUsernames);
+        recipientUsers = validation.validUsers;
+        
+        if (validation.invalidUsernames.length > 0) {
+          validationErrors.push(`Username tidak ditemukan: ${validation.invalidUsernames.join(', ')}`);
+        }
+        
+        if (validation.notFriends.length > 0) {
+          validationErrors.push(`Kamu belum berteman dengan: ${validation.notFriends.join(', ')}`);
+        }
+        
+        if (validationErrors.length > 0) {
+          await replyToUser(`❌ ${validationErrors.join('\n')}\n\nPastikan username benar dan kalian sudah berteman ya! 😊`);
+          return res.status(200).json({ ok: true });
+        }
+      }
+      
       // Handle repeat reminders (only if explicit repeat pattern detected AND no specific dueAt time)
       if (parsed.repeat && parsed.repeat !== 'none' && parsed.timeType !== 'relative') {
         let startTime = new Date();
@@ -133,15 +163,15 @@ async function inbound(req, res) {
         const dueAtUTC = startTime;
         
         // Generate formatted message for reminder using AI
-        const formattedMessage = await ai.generateReply({
+        let baseFormattedMessage = await ai.generateReply({
           kind: 'reminder_delivery',
           username,
           title: parsed.title.trim(),
           context: 'Generate a warm, motivational reminder message in Indonesian with relevant emoticons based on the activity.'
         });
 
-        const finalFormattedMessage = formattedMessage || 
-          `Halo ${username}, waktunya ${parsed.title.trim()}! 😊`;
+        baseFormattedMessage = baseFormattedMessage || 
+          `Halo, waktunya ${parsed.title.trim()}! 😊`;
 
         // Map AI's repeat values to database enum values
         let dbRepeat = 'none';
@@ -164,9 +194,10 @@ async function inbound(req, res) {
           dbRepeatType = 'monthly';
         }
 
+        // Create main reminder
         const reminder = await Reminder.create({
           UserId: user.id,
-          RecipientId: user.id,
+          RecipientId: recipientUsers.length > 0 ? null : user.id, // null if multi-recipient
           title: parsed.title.trim(),
           dueAt: dueAtUTC,
           repeat: dbRepeat,
@@ -175,8 +206,22 @@ async function inbound(req, res) {
           repeatEndDate: parsed.repeatDetails?.endDate ? new Date(parsed.repeatDetails.endDate) : null,
           isRecurring: parsed.repeat !== 'none',
           status: 'scheduled',
-          formattedMessage: finalFormattedMessage
+          formattedMessage: recipientUsers.length > 0 
+            ? generateMultiRecipientMessage(baseFormattedMessage, recipientUsers, user)
+            : baseFormattedMessage
         });
+
+        // Create ReminderRecipients if there are multiple recipients
+        if (recipientUsers.length > 0) {
+          const recipientData = recipientUsers.map(recipient => ({
+            ReminderId: reminder.id,
+            RecipientId: recipient.id,
+            status: 'scheduled'
+          }));
+          
+          await ReminderRecipient.bulkCreate(recipientData);
+          console.log(`[WA] Created reminder for ${recipientUsers.length} recipients`);
+        }
         
         await scheduleReminder(reminder);
         sessionStore.setContext(fromPhone, { lastListedIds: [] });
@@ -184,8 +229,16 @@ async function inbound(req, res) {
         const intervalText = parsed.repeatDetails?.interval 
           ? `setiap ${parsed.repeatDetails.interval} ${parsed.repeat === 'minutes' ? 'menit' : 'jam'}`
           : `setiap ${parsed.repeat === 'daily' ? 'hari' : parsed.repeat === 'weekly' ? 'minggu' : 'bulan'}`;
-          
-        await replyToUser(`✅ Siap! Aku akan mengingatkan kamu "${parsed.title}" ${intervalText}. 😊`);
+        
+        let confirmMessage;
+        if (recipientUsers.length > 0) {
+          const recipientNames = recipientUsers.map(u => u.username).join(', ');
+          confirmMessage = `✅ Siap! Aku akan mengingatkan ${recipientNames} "${parsed.title}" ${intervalText}. 😊`;
+        } else {
+          confirmMessage = `✅ Siap! Aku akan mengingatkan kamu "${parsed.title}" ${intervalText}. 😊`;
+        }
+        
+        await replyToUser(confirmMessage);
         return res.status(200).json({ ok: true });
       }
       
@@ -211,15 +264,15 @@ async function inbound(req, res) {
         }
 
         // Generate formatted message for reminder using AI
-        const formattedMessage = await ai.generateReply({
+        let baseFormattedMessage = await ai.generateReply({
           kind: 'reminder_delivery',
           username,
           title: parsed.title.trim(),
           context: 'Generate a warm, motivational reminder message in Indonesian with relevant emoticons based on the activity.'
         });
 
-        const finalFormattedMessage = formattedMessage || 
-          `Halo ${username}, waktunya ${parsed.title.trim()}! 😊`;
+        baseFormattedMessage = baseFormattedMessage || 
+          `Halo, waktunya ${parsed.title.trim()}! 😊`;
 
         // Map AI's repeat values to database enum values for regular reminders
         let dbRepeat = 'none';
@@ -246,7 +299,7 @@ async function inbound(req, res) {
 
         const reminder = await Reminder.create({
           UserId: user.id,
-          RecipientId: user.id,
+          RecipientId: recipientUsers.length > 0 ? null : user.id, // null if multi-recipient
           title: parsed.title.trim(),
           dueAt: dueAtUTC,
           repeat: dbRepeat,
@@ -255,21 +308,53 @@ async function inbound(req, res) {
           repeatEndDate: parsed.repeatDetails?.endDate ? new Date(parsed.repeatDetails.endDate) : null,
           isRecurring: parsed.repeat !== 'none',
           status: 'scheduled',
-          formattedMessage: finalFormattedMessage
+          formattedMessage: recipientUsers.length > 0 
+            ? generateMultiRecipientMessage(baseFormattedMessage, recipientUsers, user)
+            : baseFormattedMessage
         });
+
+        // Create ReminderRecipients if there are multiple recipients
+        if (recipientUsers.length > 0) {
+          const recipientData = recipientUsers.map(recipient => ({
+            ReminderId: reminder.id,
+            RecipientId: recipient.id,
+            status: 'scheduled'
+          }));
+          
+          await ReminderRecipient.bulkCreate(recipientData);
+          console.log(`[WA] Created regular reminder for ${recipientUsers.length} recipients`);
+        }
+
         await scheduleReminder(reminder);
         // persist minimal context (clear pending since created)
         sessionStore.setContext(fromPhone, { lastListedIds: [] });
 
         const whenText = humanWhen(parsed.dueAtWIB) || 'nanti';
-        // Ask AI for a one-line confirm
-        const confirm = await ai.generateReply({
-          kind: 'confirm_create',
-          username,
-          title: parsed.title,
-          whenText
-        });
-        await replyToUser(confirm || `✅ Siap, ${username}! Aku akan ingatkan kamu untuk "${parsed.title}" ${whenText}.`);
+        
+        let confirmMessage;
+        if (recipientUsers.length > 0) {
+          const recipientNames = recipientUsers.map(u => u.username).join(', ');
+          // Ask AI for a one-line confirm
+          const confirm = await ai.generateReply({
+            kind: 'confirm_create',
+            username,
+            title: parsed.title,
+            whenText,
+            context: `Multi-recipient reminder for: ${recipientNames}`
+          });
+          confirmMessage = confirm || `✅ Siap! Aku akan ingatkan ${recipientNames} untuk "${parsed.title}" ${whenText}.`;
+        } else {
+          // Ask AI for a one-line confirm
+          const confirm = await ai.generateReply({
+            kind: 'confirm_create',
+            username,
+            title: parsed.title,
+            whenText
+          });
+          confirmMessage = confirm || `✅ Siap, ${username}! Aku akan ingatkan kamu untuk "${parsed.title}" ${whenText}.`;
+        }
+        
+        await replyToUser(confirmMessage);
         return res.status(200).json({ ok: true });
       }
     }
@@ -281,6 +366,21 @@ async function inbound(req, res) {
           UserId: user.id, 
           status: 'scheduled' 
         },
+        include: [
+          {
+            model: ReminderRecipient,
+            as: 'reminderRecipients',
+            where: { status: 'scheduled' },
+            required: false,
+            include: [
+              {
+                model: User,
+                as: 'recipient',
+                attributes: ['username']
+              }
+            ]
+          }
+        ],
         order: [['dueAt', 'ASC']],
         limit: 10
       });
@@ -304,7 +404,16 @@ async function inbound(req, res) {
                `setiap ${reminder.repeatType === 'daily' ? 'hari' : reminder.repeatType === 'weekly' ? 'minggu' : 'bulan'}`})`
           : '';
         
-        listText += `${num}. "${reminder.title}" - ${whenText}${repeatText}\n`;
+        // Show recipients if multi-recipient
+        let recipientText = '';
+        if (reminder.reminderRecipients && reminder.reminderRecipients.length > 0) {
+          const recipientNames = reminder.reminderRecipients
+            .map(rr => rr.recipient.username)
+            .join(', ');
+          recipientText = ` → ${recipientNames}`;
+        }
+        
+        listText += `${num}. "${reminder.title}" - ${whenText}${repeatText}${recipientText}\n`;
       });
       
       listText += `\n💡 Kirim angka (1-${reminders.length}) untuk batalkan reminder tertentu.`;
@@ -350,19 +459,50 @@ async function inbound(req, res) {
       }
       
       const reminderId = listIds[targetIndex];
-      const reminder = await Reminder.findByPk(reminderId);
+      const reminder = await Reminder.findByPk(reminderId, {
+        include: [
+          {
+            model: ReminderRecipient,
+            as: 'reminderRecipients',
+            include: [
+              {
+                model: User,
+                as: 'recipient',
+                attributes: ['username']
+              }
+            ]
+          }
+        ]
+      });
       
       if (!reminder) {
         await replyToUser('Reminder tidak ditemukan 😅');
         return res.status(200).json({ ok: true });
       }
       
-      // Cancel the reminder
+      // Cancel the reminder and all its recipients
       reminder.status = 'cancelled';
       await reminder.save();
+      
+      // Cancel all ReminderRecipients
+      if (reminder.reminderRecipients && reminder.reminderRecipients.length > 0) {
+        await ReminderRecipient.update(
+          { status: 'cancelled' },
+          { where: { ReminderId: reminderId, status: 'scheduled' } }
+        );
+      }
+      
       await cancelReminder(reminderId);
       
-      await replyToUser(`✅ Reminder "${reminder.title}" berhasil dibatalkan!`);
+      let cancelMessage = `✅ Reminder "${reminder.title}" berhasil dibatalkan!`;
+      if (reminder.reminderRecipients && reminder.reminderRecipients.length > 0) {
+        const recipientNames = reminder.reminderRecipients
+          .map(rr => rr.recipient.username)
+          .join(', ');
+        cancelMessage += ` (untuk ${recipientNames})`;
+      }
+      
+      await replyToUser(cancelMessage);
       
       // Clear listed IDs
       sessionStore.setContext(fromPhone, { ...ctx, lastListedIds: [] });

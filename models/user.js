@@ -11,7 +11,40 @@ module.exports = (sequelize, DataTypes) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-     
+      // Define associations here
+      User.hasMany(models.Reminder, {
+        foreignKey: 'UserId',
+        as: 'createdReminders'
+      });
+      
+      User.hasMany(models.Reminder, {
+        foreignKey: 'RecipientId',
+        as: 'receivedReminders'
+      });
+
+      // Many-to-Many relationship with Reminders through ReminderRecipients
+      User.hasMany(models.ReminderRecipient, {
+        foreignKey: 'RecipientId',
+        as: 'reminderRecipients'
+      });
+
+      User.belongsToMany(models.Reminder, {
+        through: models.ReminderRecipient,
+        foreignKey: 'RecipientId',
+        otherKey: 'ReminderId',
+        as: 'reminders'
+      });
+
+      // Friend relationships
+      User.hasMany(models.Friend, {
+        foreignKey: 'UserId',
+        as: 'sentFriendRequests'
+      });
+
+      User.hasMany(models.Friend, {
+        foreignKey: 'FriendId',
+        as: 'receivedFriendRequests'
+      });
     }
   }
   User.init({
