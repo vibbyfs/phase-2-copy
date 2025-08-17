@@ -65,14 +65,17 @@ async function fireReminder(reminderId) {
             // Generate AI motivational message based on context
             if (msg.includes('{AI_MOTIVATIONAL}')) {
               try {
+                // Extract clean reminder title (remove "ingetin" prefix if present)
+                let cleanTitle = title.replace(/^(ingetin\s+)/i, '').trim();
+                
                 const motivationalMsg = await ai.generateReply({
                   kind: 'motivational_reminder',
                   username: recipient.username,
-                  title: title,
-                  context: `Generate a short motivational message in Indonesian for reminder: "${title}". Include relevant emoticons. Keep it personal and encouraging, max 1 sentence.`
+                  title: cleanTitle,
+                  context: `Generate complete reminder message in Indonesian for "${cleanTitle}" to ${recipient.username}. Include greeting, activity, and motivation with relevant emoticons.`
                 });
                 
-                const finalMotivational = motivationalMsg || 'semoga ini jadi dorongan kecil yang memotivasi kamu! ✨';
+                const finalMotivational = motivationalMsg || `Halo ${recipient.username}, ini pengingat untuk "${cleanTitle}". Semoga harimu berjalan lancar! ✨`;
                 msg = msg.replace('{AI_MOTIVATIONAL}', finalMotivational);
               } catch (aiError) {
                 console.error('[SCHED] AI motivational error:', aiError);
@@ -82,14 +85,17 @@ async function fireReminder(reminderId) {
           } else {
             // Fallback message with AI motivational
             try {
+              // Extract clean reminder title
+              let cleanTitle = title.replace(/^(ingetin\s+)/i, '').trim();
+              
               const motivationalMsg = await ai.generateReply({
                 kind: 'motivational_reminder',
                 username: recipient.username,
-                title: title,
-                context: `Generate a short motivational message in Indonesian for reminder: "${title}". Include relevant emoticons. Keep it personal and encouraging, max 1 sentence.`
+                title: cleanTitle,
+                context: `Generate complete reminder message in Indonesian for "${cleanTitle}" to ${recipient.username}. Include greeting, activity, and motivation with relevant emoticons.`
               });
               
-              const finalMotivational = motivationalMsg || 'semoga harimu berjalan lancar ya ✨🙏';
+              const finalMotivational = motivationalMsg || `Halo ${recipient.username}, ini pengingat untuk "${cleanTitle}". Semoga harimu berjalan lancar! ✨`;
               msg = `Halo ${recipient.username}, ini pengingatmu untuk "${title}". ${finalMotivational}`;
             } catch (aiError) {
               console.error('[SCHED] AI fallback error:', aiError);

@@ -172,6 +172,14 @@ async function extract({ text, userProfile = {}, sessionContext = {} }) {
 const REPLY_SYSTEM = `
 Kamu adalah asisten WhatsApp berbahasa Indonesia yang hangat, santai, dan natural.
 
+Untuk context.kind = "motivational_reminder":
+- Buat pesan pengingat LENGKAP yang SANGAT personal dan motivasional
+- Mulai dengan greeting dan aktivitas, lalu tambahkan motivasi
+- Sesuaikan emoticon dengan aktivitas (☕ untuk kopi, 💪 untuk olahraga, 📚 untuk belajar, dll)
+- Gunakan nama user jika ada dalam context
+- Format: "[greeting], waktunya [aktivitas]! [motivasi singkat] [emoticon]"
+- Jangan ulangi informasi yang sudah ada di template
+
 Untuk context.kind = "reminder_delivery":
 - Buat pesan pengingat yang SANGAT personal dan motivasional
 - Sesuaikan emoticon dengan aktivitas (☕ untuk kopi, 💪 untuk olahraga, 📚 untuk belajar, dll)
@@ -183,10 +191,10 @@ Untuk context lainnya:
 - Hasilkan **SATU kalimat** saja (maksimal satu baris), ramah & relevan dengan konteks
 - Hindari bahasa kaku, boleh pakai emoji secukupnya
 
-Contoh reminder_delivery:
+Contoh motivational_reminder:
+- title: "belajar" → "Halo Andien, waktunya belajar — fokus sedikit sekarang, kamu pasti bisa! 📚"
 - title: "minum kopi" → "Halo Budi, waktunya minum kopi! Nikmati aromanya yang bikin semangat ☕😊"
 - title: "olahraga" → "Halo Sarah, waktunya olahraga! Tubuh sehat, pikiran fresh 💪✨"
-- title: "meeting" → "Halo Alex, waktunya meeting! Semoga diskusinya produktif 📋🌟"
 - title: "minum obat" → "Halo Rina, waktunya minum obat! Jaga kesehatan ya 💊❤️"
 - title: "jemput anak" → "Halo Papa, waktunya jemput anak! Safe trip 🚗👶"
 `;

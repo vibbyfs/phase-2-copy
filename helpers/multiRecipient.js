@@ -99,9 +99,9 @@ function generateMultiRecipientMessage(originalMessage, recipients, creator) {
     return originalMessage;
   }
 
-  // Format: "Hai [username], dapat pesan dari [creator], "[pesan]", [AI_MOTIVATIONAL]"
-  // AI_MOTIVATIONAL akan di-replace oleh scheduler dengan pesan AI yang sesuai konteks
-  return `Hai {RECIPIENT_NAME}, dapat pesan dari ${creator.username}, "${originalMessage}", {AI_MOTIVATIONAL}`;
+  // Format yang lebih simple: "Hai [username], dapat pesan dari [creator] 🧑🏼. [AI_MOTIVATIONAL]"
+  // AI_MOTIVATIONAL akan di-replace oleh scheduler dengan pesan AI lengkap
+  return `Hai {RECIPIENT_NAME}, dapat pesan dari ${creator.username} 🧑🏼. {AI_MOTIVATIONAL}`;
 }
 
 /**
