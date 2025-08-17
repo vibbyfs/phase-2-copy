@@ -1,51 +1,37 @@
-// services/ai.js
-// CommonJS – Chat Completions only (tanpa max_tokens), aman untuk gpt-5-mini
+// services/ai.js (CommonJS, Chat Completions only)
 const OpenAI = require('openai');
-
 const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
 // --- Utils ---
 function safeParseJSON(str) {
   if (!str || typeof str !== 'string') return null;
-  try {
-    return JSON.parse(str);
-  } catch (_) {
-    const first = str.indexOf('{');
-    const last = str.lastIndexOf('}');
-    if (first >= 0 && last > first) {
-      try { return JSON.parse(str.slice(first, last + 1)); } catch (_) {}
-    }
-    return null;
-  }
+  try { return JSON.parse(str); } catch {}
+  const i = str.indexOf('{'), j = str.lastIndexOf('}');
+  if (i >= 0 && j > i) { try { return JSON.parse(str.slice(i, j + 1)); } catch {} }
+  return null;
 }
 
-// Heuristik cepat untuk command khusus
 function quickHeuristics(text) {
   const t = (text || '').trim().toLowerCase();
-
   const mStop = t.match(/^stop\s*\(\s*(\d+)\s*\)\s*$/i);
   if (mStop) return { intent: 'stop_number', stopNumber: parseInt(mStop[1], 10) };
-
   const mKw = t.match(/^--reminder\s+(.+)\s*$/i);
   if (mKw) return { intent: 'cancel_keyword', cancelKeyword: mKw[1].trim() };
-
   if (['list', 'daftar', 'lihat', 'reminder'].includes(t)) return { intent: 'list' };
-
   if (/(batal|hapus|stop).*(semua|semuanya|all)/i.test(t)) return { intent: 'cancel_all' };
-
   return null;
 }
 
 /**
- * extract(text, { userName, timezone })
- * Return shape:
+ * extract(text, { userName, timezone, context })
+ * Output:
  * {
  *   intent, title, recipientUsernames, timeType, dueAtWIB, repeat, repeatDetails,
  *   cancelKeyword, stopNumber, reply
  * }
  */
 async function extract(text, opts = {}) {
-  // Command cepat (biar gak selalu panggil model)
+  const { userName, timezone, context } = opts;
   const h = quickHeuristics(text);
   if (h) {
     return {
@@ -63,16 +49,18 @@ async function extract(text, opts = {}) {
   }
 
   const systemPrompt = `
-Kamu asisten WhatsApp berbahasa Indonesia yang HANGAT, NATURAL, dan KONTEKSTUAL.
-Fokus: bantu buat/batal reminder secara percakapan, seperti teman yang peduli.
-Gaya:
-- Santai (pakai "aku/kamu"), tidak kaku, tidak seperti bot.
-- Emoji secukupnya (maks 2 per balasan).
-- Jangan mengarang waktu; kalau kurang info, tanya jelas dan beri contoh singkat.
-- Jika ada potensi reminder meski user tak bilang "ingatkan", tawarkan dengan sopan.
-- Beri balasan natural (bukan template), + KEMBALIKAN JSON sesuai skema.
+Kamu asisten WhatsApp yang HANGAT dan NATURAL (bahasa Indonesia santai: aku/kamu).
+Misi: bantu buat/batal reminder secara percakapan, dukung konteks lintas pesan.
+Prinsip:
+- Jangan kaku. Balasan 1 baris, maksimal 2 emoji.
+- Kalau user belum lengkap (hanya isi atau hanya waktu), gabungkan dengan konteks sebelumnya bila tersedia, lalu tentukan intent sesuai kelengkapan.
+- Kalau masih kurang jelas, tanya sopan dan beri contoh singkat.
+- Hindari menjadikan kata waktu seperti "lagi", "nanti", "besok" sebagai judul.
+- Untuk self-reminder, recipientUsernames = [].
+- Jika waktu jelas, "dueAtWIB" harus ISO 8601 di zona Asia/Jakarta (contoh: 2025-08-17T14:00:00+07:00).
+- Jika mendeteksi potensi reminder (perintah/reflektif/harapan) tanpa eksplisit, gunakan "potential_reminder".
 
-KELUARKAN **HANYA** JSON persis skema ini:
+Struktur output WAJIB JSON valid:
 {
   "intent": "create" | "need_time" | "need_content" | "list" | "cancel_keyword" | "stop_number" | "cancel" | "cancel_all" | "potential_reminder" | "unknown",
   "title": string | null,
@@ -85,30 +73,32 @@ KELUARKAN **HANYA** JSON persis skema ini:
   "stopNumber": number | null,
   "reply": string
 }
-
-Aturan ringkas:
-- "create": isi & waktu cukup.
-- "need_time": ada isi, belum waktu.
-- "need_content": ada waktu, belum isi.
-- "list": minta daftar.
-- "cancel_keyword": pola --reminder <keyword>.
-- "stop_number": pola stop (No).
-- "cancel": stop reminder berulang saja.
-- "cancel_all": stop semua.
-- "potential_reminder": indikasi ingin diingatkan (perintah/harapan/reflektif) tapi belum eksplisit.
-- "unknown": random/umum → tetap balas hangat & tawarkan bantuan reminder.
-
-Catatan:
-- "title" JANGAN mengandung kata waktu ("lagi", "nanti", "besok", dsb).
-- "dueAtWIB": ISO 8601 zona Asia/Jakarta bila waktu jelas (termasuk "1 menit lagi").
-- "reply": balasan natural singkat, maksimal 2 emoji.
 `;
 
+  const ctx = context && typeof context === 'object' ? {
+    lastIntent: context.lastIntent || null,
+    pendingTitle: context.pendingTitle || null,
+    pendingDueAtWIB: context.pendingDueAtWIB || null,
+    pendingRepeat: context.pendingRepeat || 'none',
+    pendingRepeatDetails: context.pendingRepeatDetails || {}
+  } : null;
+
   const userMsg = `
-Nama user: ${opts.userName || '-'}
-Zona waktu: ${opts.timezone || 'Asia/Jakarta'}
-Pesan user: "${text}"
-Balas dengan JSON valid sesuai SKEMA (tanpa teks lain).
+Nama user: ${userName || '-'}
+Zona waktu: ${timezone || 'Asia/Jakarta'}
+
+Konteks percakapan sebelumnya (bila ada):
+${JSON.stringify(ctx || {}, null, 2)}
+
+Pesan user saat ini: "${text}"
+
+TUGAS:
+- Deteksi intent.
+- Gabungkan informasi dari konteks bila relevan (misal: user baru menyebut jam sekarang, isi ada di konteks → jadikan lengkap).
+- Jika sudah lengkap, intent "create" dan isi dueAtWIB.
+- Jawab ringkas & hangat dalam "reply" (1 baris, ≤2 emoji).
+
+Balas HANYA JSON valid sesuai skema (tanpa teks lain).
 `;
 
   let raw;
@@ -118,11 +108,11 @@ Balas dengan JSON valid sesuai SKEMA (tanpa teks lain).
       messages: [
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg }
-      ],
-      // PENTING: jangan kirim max_tokens di model ini → error "unsupported_parameter"
-      // response_format JSON bisa tidak didukung pada sebagian model.
-      // Kalau model-mu error karena ini, hapus baris response_format di bawah.
-      response_format: { type: 'json_object' }
+      ]
+      // JANGAN kirim max_tokens/temperature → model menolak.
+      // Boleh pertahankan response_format JSON kalau model mendukung.
+      // Jika model kamu error dengan response_format, hapus baris di bawah.
+      ,response_format: { type: 'json_object' }
     });
     raw = resp?.choices?.[0]?.message?.content?.trim();
     if (!raw) throw new Error('Empty AI response');
@@ -130,7 +120,7 @@ Balas dengan JSON valid sesuai SKEMA (tanpa teks lain).
     console.error('[AI] Extract error:', e);
     return {
       intent: 'unknown',
-      title: (text || '').trim(),
+      title: null,
       recipientUsernames: [],
       timeType: 'relative',
       dueAtWIB: null,
@@ -138,7 +128,7 @@ Balas dengan JSON valid sesuai SKEMA (tanpa teks lain).
       repeatDetails: {},
       cancelKeyword: null,
       stopNumber: null,
-      reply: 'Aku bisa bantu bikin pengingat biar nggak lupa. Mau diingatkan tentang apa, dan kapan? 😊'
+      reply: 'Aku bisa bantu kamu bikin pengingat biar nggak lupa. Mau diingatkan apa dan kapan? 😊'
     };
   }
 
@@ -146,7 +136,7 @@ Balas dengan JSON valid sesuai SKEMA (tanpa teks lain).
   if (!parsed || typeof parsed !== 'object') {
     return {
       intent: 'unknown',
-      title: (text || '').trim(),
+      title: null,
       recipientUsernames: [],
       timeType: 'relative',
       dueAtWIB: null,
@@ -154,14 +144,17 @@ Balas dengan JSON valid sesuai SKEMA (tanpa teks lain).
       repeatDetails: {},
       cancelKeyword: null,
       stopNumber: null,
-      reply: 'Boleh jelaskan mau diingatkan apa, dan jam berapa? Aku bantu aturkan ya 😊'
+      reply: 'Boleh jelasin mau diingatkan apa dan jam berapa? Aku bantu aturin ya 🙂'
     };
   }
+
+  // Normalisasi agar self-reminder tidak mengisi recipient
+  const recipients = Array.isArray(parsed.recipientUsernames) ? parsed.recipientUsernames : [];
 
   return {
     intent: parsed.intent || 'unknown',
     title: parsed.title || null,
-    recipientUsernames: Array.isArray(parsed.recipientUsernames) ? parsed.recipientUsernames : [],
+    recipientUsernames: recipients,
     timeType: parsed.timeType || 'relative',
     dueAtWIB: parsed.dueAtWIB || null,
     repeat: parsed.repeat || 'none',
