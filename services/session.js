@@ -1,30 +1,60 @@
-// services/session.js
-// Penyimpanan sesi in-memory sederhana (TTL default 10 menit) untuk menyambungkan
-// step "need_time" → "need_content" agar judul tidak hilang (mis. tidak jadi "lagi").
+// /services/session.js  (ESM)
+// Penyimpanan konteks singkat untuk percakapan (judul/waktu sementara) dengan TTL.
+const STORE = new Map(); // key: userId, value: { data: object, expiresAt: number }
+const DEFAULT_TTL_MS = 10 * 60 * 1000; // 10 menit
 
-const TTL_MS = 10 * 60 * 1000; // 10 menit
-const store = new Map(); // key: userId (string), value: { data, expireAt }
-
-function setContext(userId, data, ttlMs = TTL_MS) {
-  const key = String(userId);
-  const prev = store.get(key)?.data || {};
-  const merged = { ...prev, ...data };
-  const expireAt = Date.now() + ttlMs;
-  store.set(key, { data: merged, expireAt });
+function now() {
+  return Date.now();
 }
 
-function getContext(userId) {
-  const item = store.get(String(userId));
-  if (!item) return null;
-  if (Date.now() > item.expireAt) {
-    store.delete(String(userId));
+function isValid(entry) {
+  return entry && typeof entry === 'object' && entry.expiresAt && entry.expiresAt > now();
+}
+
+/**
+ * Simpan/merge context user dengan TTL (default 10 menit).
+ * @param {number|string} userId
+ * @param {object} patch - data yang akan di-merge
+ * @param {number} ttlMs - custom TTL (opsional)
+ */
+export function setContext(userId, patch = {}, ttlMs = DEFAULT_TTL_MS) {
+  const key = String(userId);
+  const prev = STORE.get(key);
+  const base = isValid(prev) ? (prev.data || {}) : {};
+  const data = { ...base, ...patch };
+  STORE.set(key, { data, expiresAt: now() + ttlMs });
+}
+
+/**
+ * Ambil context user (hanya jika belum kedaluwarsa).
+ * @param {number|string} userId
+ * @returns {object|null}
+ */
+export function getContext(userId) {
+  const key = String(userId);
+  const entry = STORE.get(key);
+  if (!isValid(entry)) {
+    STORE.delete(key);
     return null;
   }
-  return item.data;
+  return entry.data || null;
 }
 
-function clearContext(userId) {
-  store.delete(String(userId));
+/**
+ * Hapus context user.
+ * @param {number|string} userId
+ */
+export function clearContext(userId) {
+  const key = String(userId);
+  STORE.delete(key);
 }
 
-module.exports = { setContext, getContext, clearContext };
+// Pembersihan berkala (tiap 60 detik)
+setInterval(() => {
+  const t = now();
+  for (const [key, entry] of STORE.entries()) {
+    if (!entry || entry.expiresAt <= t) STORE.delete(key);
+  }
+}, 60 * 1000).unref?.();
+
+export default { setContext, getContext, clearContext };
