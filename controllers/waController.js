@@ -81,8 +81,8 @@ async function inbound(req, res) {
     // Handle different intents
     if (parsed.intent === 'create' && parsed.title) {
       
-      // Handle repeat reminders (prioritize repeat over specific time)
-      if (parsed.repeat && parsed.repeat !== 'none') {
+      // Handle repeat reminders (only if explicit repeat pattern detected AND no specific dueAt time)
+      if (parsed.repeat && parsed.repeat !== 'none' && parsed.timeType !== 'relative') {
         let startTime = new Date();
         
         if (parsed.repeat === 'minutes' || parsed.repeat === 'hours') {
@@ -251,6 +251,48 @@ async function inbound(req, res) {
       }
     }
 
+    // Handle list reminders
+    if (parsed.intent === 'list') {
+      const reminders = await Reminder.findAll({
+        where: { 
+          UserId: user.id, 
+          status: 'scheduled' 
+        },
+        order: [['dueAt', 'ASC']],
+        limit: 10
+      });
+
+      if (reminders.length === 0) {
+        await replyToUser('Kamu belum punya pengingat aktif nih 😊 Mau bikin sekarang?');
+        return res.status(200).json({ ok: true });
+      }
+
+      let listText = `📋 Pengingat aktif kamu (${reminders.length}):\n\n`;
+      const listIds = [];
+      
+      reminders.forEach((reminder, idx) => {
+        const num = idx + 1;
+        listIds.push(reminder.id);
+        
+        const whenText = humanWhen(reminder.dueAt.toISOString().replace('Z', '+07:00'));
+        const repeatText = reminder.isRecurring 
+          ? ` (${reminder.repeatType === 'minutes' ? `setiap ${reminder.repeatInterval} menit` : 
+               reminder.repeatType === 'hours' ? `setiap ${reminder.repeatInterval} jam` :
+               `setiap ${reminder.repeatType === 'daily' ? 'hari' : reminder.repeatType === 'weekly' ? 'minggu' : 'bulan'}`})`
+          : '';
+        
+        listText += `${num}. "${reminder.title}" - ${whenText}${repeatText}\n`;
+      });
+      
+      listText += `\n💡 Kirim angka (1-${reminders.length}) untuk batalkan reminder tertentu.`;
+      
+      // Store listed IDs for stop_number intent
+      sessionStore.setContext(fromPhone, { ...ctx, lastListedIds: listIds });
+      
+      await replyToUser(listText);
+      return res.status(200).json({ ok: true });
+    }
+
     if (parsed.intent === 'need_time' && parsed.title) {
       // keep pending title in context
       sessionStore.setContext(fromPhone, { ...ctx, pendingTitle: parsed.title });
@@ -271,6 +313,36 @@ async function inbound(req, res) {
         sessionStore.setContext(fromPhone, { ...ctx, pendingTitle: parsed.title });
       }
       await replyToUser(parsed.reply || 'Mau aku bantu bikin pengingat untuk itu? 😊 Kalau iya, kamu mau diingatkan jam berapa?');
+      return res.status(200).json({ ok: true });
+    }
+
+    // Handle stop by number (after list)
+    if (parsed.intent === 'stop_number' && parsed.stopNumber) {
+      const listIds = ctx.lastListedIds || [];
+      const targetIndex = parsed.stopNumber - 1;
+      
+      if (targetIndex < 0 || targetIndex >= listIds.length) {
+        await replyToUser('Nomor reminder tidak valid nih 😅 Coba kirim "list" lagi ya.');
+        return res.status(200).json({ ok: true });
+      }
+      
+      const reminderId = listIds[targetIndex];
+      const reminder = await Reminder.findByPk(reminderId);
+      
+      if (!reminder) {
+        await replyToUser('Reminder tidak ditemukan 😅');
+        return res.status(200).json({ ok: true });
+      }
+      
+      // Cancel the reminder
+      reminder.status = 'cancelled';
+      await reminder.save();
+      await cancelReminder(reminderId);
+      
+      await replyToUser(`✅ Reminder "${reminder.title}" berhasil dibatalkan!`);
+      
+      // Clear listed IDs
+      sessionStore.setContext(fromPhone, { ...ctx, lastListedIds: [] });
       return res.status(200).json({ ok: true });
     }
 
