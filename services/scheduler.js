@@ -1,27 +1,6 @@
 // services/scheduler.js
-    const to = String(user.phone); // pastikan string
-    const title = reminder.title || 'pengingat';
-    
-    // Use formattedMessage from database if available, otherwise generate fallback
-    let msg = reminder.formattedMessage;
-    if (!msg || msg.trim() === '') {
-      // Generate message using AI if not stored
-      try {
-        const generatedMsg = await ai.generateReply({
-          kind: 'reminder_message',
-          username: user.username,
-          title: title,
-          recipientName: user.username
-        });
-        msg = generatedMsg || `Halo ${user.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
-      } catch (aiError) {
-        console.error('[SCHED] AI generate message error:', aiError);
-        msg = `Halo ${user.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
-      }
-    }
-
-    await sendMessage(to, msg, reminder.id); schedule = require('node-schedule');
-const { Op } = require('sequelize');             // <<— Sequelize v6 operators
+const schedule = require('node-schedule');
+const { Op } = require('sequelize');             
 const { User, Reminder } = require('../models');
 const { sendMessage } = require('./waOutbound');
 const ai = require('./ai');
@@ -47,7 +26,24 @@ async function fireReminder(reminderId) {
 
     const to = String(user.phone); // pastikan string
     const title = reminder.title || 'pengingat';
-    const msg = `Halo ${user.username || 'kamu'}, ini pengingatmu untuk “${title}”. 😊`;
+    
+    // Use formattedMessage from database if available, otherwise generate with AI
+    let msg = reminder.formattedMessage;
+    if (!msg || msg.trim() === '') {
+      // Generate message using AI if not stored
+      try {
+        const generatedMsg = await ai.generateReply({
+          kind: 'reminder_delivery',
+          username: user.username,
+          title: title,
+          context: 'Generate a warm, motivational reminder message in Indonesian with relevant emoticons'
+        });
+        msg = generatedMsg || `Halo ${user.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
+      } catch (aiError) {
+        console.error('[SCHED] AI generate message error:', aiError);
+        msg = `Halo ${user.username || 'kamu'}, ini pengingatmu untuk "${title}". Semoga harimu berjalan lancar ya ✨🙏`;
+      }
+    }
 
     await sendMessage(to, msg, reminder.id);
 
@@ -108,7 +104,7 @@ async function loadAllScheduledReminders() {
     const rows = await Reminder.findAll({
       where: {
         status: 'scheduled',
-        dueAt: { [Op.gte]: since }             // <<— gunakan Op.gte (bukan `$gte`)
+        dueAt: { [Op.gte]: since }             
       },
       order: [['dueAt', 'ASC']]
     });
