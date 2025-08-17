@@ -1,107 +1,164 @@
-// services/ai.js
+/* services/ai.js - CommonJS, Chat Completions only (no Responses API params)
+   Model: gpt-5-mini
+   Notes:
+   - No 'temperature' override (some deployments restrict it)
+   - No 'max_tokens' / 'max_completion_tokens' / 'max_output_tokens'
+   - Always return robust fallback when API fails
+*/
 const OpenAI = require('openai');
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL = process.env.AI_MODEL || 'gpt-5-mini';
+// Utility: safe JSON extractor (grabs first top-level object)
+function safeParseJSON(text) {
+  if (!text || typeof text !== 'string') return null;
+  // Try direct parse first
+  try { return JSON.parse(text); } catch(_) {}
+  // Fallback: extract first {...} block
+  const start = text.indexOf('{');
+  const end = text.lastIndexOf('}');
+  if (start >= 0 && end > start) {
+    const slice = text.slice(start, end + 1);
+    try { return JSON.parse(slice); } catch(_) {}
+  }
+  return null;
+}
 
-// --- Responses API call helper (tanpa 'max_tokens' & tanpa 'temperature' kustom)
-async function callModel({ systemText, userText, maxTokens = 400 }) {
-  const resp = await client.responses.create({
-    model: MODEL,
-    input: [
-      { role: 'system', content: [{ type: 'input_text', text: systemText || '' }] },
-      { role: 'user',   content: [{ type: 'input_text', text: userText   || '' }] }
-    ],
-    max_completion_tokens: maxTokens
+async function chatJSON(system, user, extraMessages = []) {
+  const messages = [
+    { role: 'system', content: system },
+    ...extraMessages,
+    { role: 'user', content: user }
+  ];
+  let outText = '';
+  try {
+    const resp = await openai.chat.completions.create({
+      model: process.env.OPENAI_MODEL || 'gpt-5-mini',
+      messages,
+      // Do not set temperature or max_tokens to avoid model-specific errors
+    });
+    outText = resp?.choices?.[0]?.message?.content || '';
+  } catch (err) {
+    console.error('[AI] API error:', err?.message || err);
+    throw err;
+  }
+  return outText;
+}
+
+// Build Indonesian JSON-only extractor system prompt
+const EXTRACT_SYSTEM = `
+Kamu adalah asisten yang mengekstrak niat pengguna WhatsApp untuk pengingat dalam Bahasa Indonesia.
+Kembalikan **JSON murni saja** tanpa penjelasan lain.
+
+Skema:
+{
+  "intent": "unknown" | "potential_reminder" | "need_time" | "need_content" | "create" | "cancel_keyword" | "stop_number" | "list",
+  "title": string | null,                         // isi pengingat (mis. "makan siang")
+  "recipientUsernames": string[],                 // jika menyebut nama teman
+  "timeType": "relative" | "absolute",            // jenis waktu bila ada
+  "dueAtWIB": string | null,                      // ISO 8601 Asia/Jakarta (contoh "2025-08-17T14:00:00+07:00")
+  "repeat": "none" | "daily" | "weekly" | "monthly",
+  "repeatDetails": {
+    "timeOfDay": string | null,                   // "14:00", dsb
+    "dayOfWeek": string | null,                   // "senin", dsb (bila weekly)
+    "dayOfMonth": number | null                   // (bila monthly)
+  },
+  "cancelKeyword": string | null,                 // bila user kirim --reminder <keyword>
+  "stopNumber": number | null,                    // bila user kirim "stop (N)"
+  "reply": string                                 // satu kalimat balasan percakapan yang hangat & natural (bukan template), max 1 baris
+}
+
+Aturan penting:
+- Deteksi niat pembuatan pengingat walau tanpa kata "ingatkan" (contoh: "jemput John nanti", "aku suka lupa minum air", "semoga gak lupa jemput John").
+- Jika pesan hanya waktu (contoh "2 menit lagi") tanpa isi, intent = "need_content".
+- Jika pesan hanya isi (contoh "minum obat") tanpa waktu, intent = "need_time".
+- Jika keduanya ada, intent = "create".
+- Jika mulai dengan "--reminder <keyword>", intent = "cancel_keyword", cancelKeyword=keyword.
+- Jika format "stop (N)", intent = "stop_number", stopNumber=N.
+- Jika "list" => intent = "list".
+- Waktu:
+  - Pahami: "1/2/5/15 menit lagi", "jam 20.00", "20:30", "besok jam 2 siang", "rabu depan jam 3", "lusa", "pagi/siang/sore/malam".
+  - Konversi ke WIB ISO di dueAtWIB (gunakan nowWIB). Jika hanya hari (mis. "besok") tanpa jam, minta jam -> intent "need_time".
+- reply: hangat, personal, dan relevan dengan pesan terbaru & konteks; 1 kalimat, tidak kaku, tanpa daftar panjang.
+`;
+
+function buildExtractUserPrompt({ text, username, nowWIB, lastContext }) {
+  const ctx = {
+    text,
+    username,
+    nowWIB,          // ISO Asia/Jakarta "YYYY-MM-DDTHH:mm:ss+07:00"
+    lastContext      // { pendingTitle, pendingTimeHint, lastListedIds }
+  };
+  return JSON.stringify(ctx);
+}
+
+async function extract({ text, userProfile = {}, sessionContext = {} }) {
+  const now = new Date();
+  const offsetMs = 7 * 60 * 60 * 1000;
+  const nowWIB = new Date(now.getTime() + offsetMs).toISOString().replace('Z', '+07:00');
+
+  const system = EXTRACT_SYSTEM;
+  const user = buildExtractUserPrompt({
+    text,
+    username: userProfile?.username || null,
+    nowWIB,
+    lastContext: sessionContext || null
   });
 
-  const text = (resp.output_text || '').trim();
-  if (!text) throw new Error('Empty AI response');
-  return text;
-}
-
-// --- Extractor: kembalikan struktur yang dipakai controller
-async function extract({ username, text, tz = 'Asia/Jakarta' }) {
-  const system = [
-    'Kamu asisten WhatsApp yang natural & ramah (Indonesia).',
-    'Deteksi niat reminder, parsing waktu (relative/absolute), pembatalan (--reminder <kw>, stop (n)).',
-    'Kembalikan HANYA JSON valid sesuai schema. Tanpa penjelasan lain.'
-  ].join(' ');
-
-  const schema = {
-    intent: 'unknown|potential_reminder|need_time|need_content|create|cancel_keyword|stop_number',
-    title: 'string|null',
-    recipientUsernames: ['string'],
-    timeType: 'relative|absolute',
-    dueAtWIB: 'ISO8601|null',
-    repeat: 'none|daily|weekly|monthly',
-    repeatDetails: { timeOfDay: 'HH:mm|null', dayOfWeek: '1-7|null', dayOfMonth: '1-31|null' },
-    cancelKeyword: 'string|null',
-    stopNumber: 'number|null',
-    reply: 'string|null'
-  };
-
-  const user = [
-    `User: ${username || 'pengguna'}`,
-    `Timezone: ${tz}`,
-    'Schema JSON:',
-    JSON.stringify(schema, null, 2),
-    'Catatan:',
-    '- Jika pesan hanya waktu → intent=need_content.',
-    '- Jika pesan hanya aktivitas → intent=need_time.',
-    '- Jika keduanya ada → intent=create dan isi dueAtWIB (WIB).',
-    '- Random/halo/curhat → intent=unknown & reply ramah yang membuka opsi reminder.',
-    '- "--reminder <kw>" → intent=cancel_keyword & cancelKeyword=kw.',
-    '- "stop (n)" → intent=stop_number & stopNumber=n.',
-    '',
-    `Pesan: """${text}"""`
-  ].join('\n');
-
-  const raw = await callModel({ systemText: system, userText: user, maxTokens: 500 });
-
-  // Ambil blok JSON pertama agar tahan noise
-  let parsed;
+  let out;
   try {
-    const start = raw.indexOf('{');
-    const end = raw.lastIndexOf('}');
-    if (start === -1 || end === -1) throw new Error('No JSON found');
-    parsed = JSON.parse(raw.slice(start, end + 1));
-  } catch {
-    throw new Error('Empty AI response');
+    const raw = await chatJSON(system, user);
+    out = safeParseJSON(raw);
+  } catch (err) {
+    // API failure -> handled below
   }
 
-  return {
-    intent: parsed.intent || 'unknown',
-    title: parsed.title ?? null,
-    recipientUsernames: Array.isArray(parsed.recipientUsernames) ? parsed.recipientUsernames : [],
-    timeType: parsed.timeType || 'absolute',
-    dueAtWIB: parsed.dueAtWIB || null,
-    repeat: parsed.repeat || 'none',
-    repeatDetails: parsed.repeatDetails || { timeOfDay: null, dayOfWeek: null, dayOfMonth: null },
-    cancelKeyword: parsed.cancelKeyword || null,
-    stopNumber: parsed.stopNumber || null,
-    reply: parsed.reply || null
-  };
+  // Default object if parsing fails
+  if (!out || typeof out !== 'object') {
+    return {
+      intent: 'unknown',
+      title: text?.trim() || null,
+      recipientUsernames: [],
+      timeType: 'absolute',
+      dueAtWIB: null,
+      repeat: 'none',
+      repeatDetails: { timeOfDay: null, dayOfWeek: null, dayOfMonth: null },
+      cancelKeyword: null,
+      stopNumber: null,
+      reply: 'Aku di sini buat bantu kamu bikin pengingat biar nggak lupa. Mau diingatkan tentang apa, dan kapan? 😊'
+    };
+  }
+
+  // Normalize minimal fields
+  out.recipientUsernames = Array.isArray(out.recipientUsernames) ? out.recipientUsernames : [];
+  out.repeat = out.repeat || 'none';
+  if (!out.repeatDetails) out.repeatDetails = { timeOfDay: null, dayOfWeek: null, dayOfMonth: null };
+  if (typeof out.reply !== 'string' || !out.reply.trim()) {
+    out.reply = 'Siap. Ada yang mau kamu ingatkan?';
+  }
+
+  return out;
 }
 
-// --- Generator balasan singkat & natural (tanpa template kaku)
-async function generateReply({ username, context, tz = 'Asia/Jakarta' }) {
-  const system = [
-    'Asisten WhatsApp yang hangat, singkat, natural.',
-    'Maks 1–2 kalimat. Arahkan lembut ke fitur reminder bila relevan.',
-    'Emoji secukupnya.'
-  ].join(' ');
-  const user = [
-    `Nama: ${username || 'kamu'}`,
-    `Timezone: ${tz}`,
-    `Konteks: ${JSON.stringify(context)}`
-  ].join('\n');
+// One-line friendly message generator (no hard template). Keep it single sentence.
+const REPLY_SYSTEM = `
+Kamu adalah asisten WhatsApp berbahasa Indonesia yang hangat, santai, dan natural.
+Tugas: hasilkan **SATU kalimat** saja (maksimal satu baris), ramah & relevan dengan konteks.
+Hindari bahasa kaku. Boleh pakai emoji secukupnya.
+`;
 
-  return callModel({ systemText: system, userText: user, maxTokens: 120 });
+async function generateReply(context) {
+  const user = JSON.stringify(context || {});
+  try {
+    const text = await chatJSON(REPLY_SYSTEM, user);
+    // ensure it is a single line
+    return (text || '').replace(/\s+/g, ' ').trim();
+  } catch (err) {
+    console.error('[AI] generateReply error:', err?.message || err);
+    return null;
+  }
 }
 
-function extractTitleFromText(text = '') {
-  return (text || '').trim().replace(/\s+/g, ' ').slice(0, 120);
-}
-
-module.exports = { extract, generateReply, extractTitleFromText };
+module.exports = {
+  extract,
+  generateReply
+};
