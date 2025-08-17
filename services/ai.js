@@ -1,69 +1,51 @@
 // services/ai.js
-// CommonJS – gunakan Chat Completions (bukan Responses API)
-// Model: gpt-5-mini (tanpa set temperature agar tidak error)
-
+// CommonJS – Chat Completions only (tanpa max_tokens), aman untuk gpt-5-mini
 const OpenAI = require('openai');
 
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
+const client = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Util: coba parse JSON aman
+// --- Utils ---
 function safeParseJSON(str) {
   if (!str || typeof str !== 'string') return null;
   try {
     return JSON.parse(str);
   } catch (_) {
-    // Coba ekstrak blok { ... } terluar
     const first = str.indexOf('{');
     const last = str.lastIndexOf('}');
     if (first >= 0 && last > first) {
-      try {
-        return JSON.parse(str.slice(first, last + 1));
-      } catch (_) {
-        return null;
-      }
+      try { return JSON.parse(str.slice(first, last + 1)); } catch (_) {}
     }
     return null;
   }
 }
 
-// Heuristik cepat untuk beberapa pola agar tetap responsif kalau AI gagal
+// Heuristik cepat untuk command khusus
 function quickHeuristics(text) {
   const t = (text || '').trim().toLowerCase();
 
-  // stop (No)
   const mStop = t.match(/^stop\s*\(\s*(\d+)\s*\)\s*$/i);
-  if (mStop) {
-    return { intent: 'stop_number', stopNumber: parseInt(mStop[1], 10) };
-  }
+  if (mStop) return { intent: 'stop_number', stopNumber: parseInt(mStop[1], 10) };
 
-  // --reminder keyword
   const mKw = t.match(/^--reminder\s+(.+)\s*$/i);
-  if (mKw) {
-    return { intent: 'cancel_keyword', cancelKeyword: mKw[1].trim() };
-  }
+  if (mKw) return { intent: 'cancel_keyword', cancelKeyword: mKw[1].trim() };
 
-  // list
-  if (['list', 'daftar', 'lihat', 'reminder'].includes(t)) {
-    return { intent: 'list' };
-  }
+  if (['list', 'daftar', 'lihat', 'reminder'].includes(t)) return { intent: 'list' };
 
-  // cancel all
-  if (/(batal|hapus|stop).*(semua|semuanya|all)/i.test(t)) {
-    return { intent: 'cancel_all' };
-  }
+  if (/(batal|hapus|stop).*(semua|semuanya|all)/i.test(t)) return { intent: 'cancel_all' };
 
-  return null; // biar model yang tentukan
+  return null;
 }
 
 /**
- * extract(text, opts) -> { intent, title, dueAtWIB, timeType, repeat, repeatDetails, recipientUsernames, reply, stopNumber, cancelKeyword }
- * - reply: balasan natural (bukan template) yang langsung bisa dikirim ke user
- * - dueAtWIB: ISO Asia/Jakarta jika ada
+ * extract(text, { userName, timezone })
+ * Return shape:
+ * {
+ *   intent, title, recipientUsernames, timeType, dueAtWIB, repeat, repeatDetails,
+ *   cancelKeyword, stopNumber, reply
+ * }
  */
 async function extract(text, opts = {}) {
-  // Heuristik dulu supaya cepat
+  // Command cepat (biar gak selalu panggil model)
   const h = quickHeuristics(text);
   if (h) {
     return {
@@ -80,69 +62,56 @@ async function extract(text, opts = {}) {
     };
   }
 
-  // Prompt sistem yang menggabungkan 8 fitur dan gaya natural
   const systemPrompt = `
-Kamu adalah asisten WhatsApp berbahasa Indonesia yang HANGAT, NATURAL, dan KONTEKSTUAL.
-Tugas: bantu buat & batal reminder dengan percakapan yang enak, seperti teman yang peduli.
-HARUS:
-- Gaya santai (pakai "aku" & "kamu"), ramah, tidak kaku, tidak seperti bot.
-- Emoji secukupnya (😊✨🙏), jangan berlebihan. Maksimal 2 emoji per balasan.
-- Hindari template generik berulang; balasan harus menyesuaikan konteks user.
-- Jika belum cukup info, tanya dengan jelas dan beri contoh singkat format waktu (jam 20.00, 1 jam lagi, besok 09.00).
-- Jangan mengarang waktu. Jika user belum sebut waktu/aktivitas, minta klarifikasi.
-- Jika mendeteksi potensi reminder meski tanpa kata "ingatkan", TAWARKAN dengan sopan.
-- Saat membalas, kamu juga mengembalikan STRUKTUR JSON untuk keperluan server.
-- Motivasi boleh 1 baris pendek MAKSIMAL, spontan sesuai konteks (jangan pakai pola kalimat yang sama terus).
+Kamu asisten WhatsApp berbahasa Indonesia yang HANGAT, NATURAL, dan KONTEKSTUAL.
+Fokus: bantu buat/batal reminder secara percakapan, seperti teman yang peduli.
+Gaya:
+- Santai (pakai "aku/kamu"), tidak kaku, tidak seperti bot.
+- Emoji secukupnya (maks 2 per balasan).
+- Jangan mengarang waktu; kalau kurang info, tanya jelas dan beri contoh singkat.
+- Jika ada potensi reminder meski user tak bilang "ingatkan", tawarkan dengan sopan.
+- Beri balasan natural (bukan template), + KEMBALIKAN JSON sesuai skema.
 
-Keluarkan dalam JSON DENGAN STRUKTUR TEPAT berikut:
+KELUARKAN **HANYA** JSON persis skema ini:
 {
   "intent": "create" | "need_time" | "need_content" | "list" | "cancel_keyword" | "stop_number" | "cancel" | "cancel_all" | "potential_reminder" | "unknown",
-  "title": string | null,            // isi reminder, singkat & jelas, TANPA kata "lagi", "nanti", dll
-  "recipientUsernames": string[],    // array username, mis. ["@andi"]. Kosongkan jika tidak ada.
+  "title": string | null,
+  "recipientUsernames": string[],
   "timeType": "relative" | "absolute" | "recurring",
-  "dueAtWIB": string | null,         // ISO 8601 di zona Asia/Jakarta (contoh: "2025-08-17T20:00:00+07:00") jika sudah bisa ditentukan
+  "dueAtWIB": string | null,
   "repeat": "none" | "hourly" | "daily" | "weekly" | "monthly",
-  "repeatDetails": {                 // opsional untuk recurring
-     "timeOfDay": string | null,     // "HH:mm"
-     "dayOfWeek": string | null,     // "senin"..."minggu"
-     "dayOfMonth": number | null     // 1..31
-  },
-  "cancelKeyword": string | null,    // jika user kirim --reminder [keyword]
-  "stopNumber": number | null,       // jika user kirim stop (No)
-  "reply": string                    // BALASAN NATURAL SATU PARAGRAF PENDEK untuk user, sesuai konteks
+  "repeatDetails": { "timeOfDay": string | null, "dayOfWeek": string | null, "dayOfMonth": number | null },
+  "cancelKeyword": string | null,
+  "stopNumber": number | null,
+  "reply": string
 }
 
-Aturan penentuan intent ringkas:
-- "create": isi & waktu cukup untuk dijadwalkan (sekali).
-- "need_time": ada isi, belum ada waktu.
-- "need_content": ada waktu, belum ada isi.
-- "list": user minta daftar.
-- "cancel_keyword": user kirim "--reminder <keyword>".
-- "stop_number": user kirim "stop (No)".
-- "cancel": user minta stop reminder berulang secara umum.
-- "cancel_all": user minta stop semua reminder aktif.
-- "potential_reminder": ada indikasi ingin diingatkan tapi belum eksplisit (perintah/harapan/reflektif).
-- "unknown": tidak relevan / random -> tetap balas hangat dan tawarkan bantuan pengingat dengan lembut.
+Aturan ringkas:
+- "create": isi & waktu cukup.
+- "need_time": ada isi, belum waktu.
+- "need_content": ada waktu, belum isi.
+- "list": minta daftar.
+- "cancel_keyword": pola --reminder <keyword>.
+- "stop_number": pola stop (No).
+- "cancel": stop reminder berulang saja.
+- "cancel_all": stop semua.
+- "potential_reminder": indikasi ingin diingatkan (perintah/harapan/reflektif) tapi belum eksplisit.
+- "unknown": random/umum → tetap balas hangat & tawarkan bantuan reminder.
 
-PENTING:
-- "title" jangan berisi kata waktu seperti "lagi", "nanti", "besok".
-- "reply" harus natural, tidak kaku, tidak template. Boleh ada contoh singkat jika perlu.
-- Jika user hanya menjawab waktu (mis. "1 menit lagi"), jangan isi "title" sembarang. Biarkan null dan set intent "need_content".
-- Jika user hanya sebut isi (mis. "beli kopi nescafe"), jangan karang jam. Set intent "need_time".
-- "dueAtWIB" harus valid ISO Asia/Jakarta jika waktu sudah jelas, termasuk kasus "1 menit lagi".
+Catatan:
+- "title" JANGAN mengandung kata waktu ("lagi", "nanti", "besok", dsb).
+- "dueAtWIB": ISO 8601 zona Asia/Jakarta bila waktu jelas (termasuk "1 menit lagi").
+- "reply": balasan natural singkat, maksimal 2 emoji.
 `;
-
-  const userName = opts.userName || null;
-  const userTz = opts.timezone || 'Asia/Jakarta';
 
   const userMsg = `
-Nama user: ${userName || '-'}
-Zona waktu: ${userTz}
+Nama user: ${opts.userName || '-'}
+Zona waktu: ${opts.timezone || 'Asia/Jakarta'}
 Pesan user: "${text}"
-Balas sesuai aturan, hasilkan JSON persis seperti skema di atas.
+Balas dengan JSON valid sesuai SKEMA (tanpa teks lain).
 `;
 
-  let content;
+  let raw;
   try {
     const resp = await client.chat.completions.create({
       model: process.env.OPENAI_MODEL || 'gpt-5-mini',
@@ -150,16 +119,15 @@ Balas sesuai aturan, hasilkan JSON persis seperti skema di atas.
         { role: 'system', content: systemPrompt },
         { role: 'user', content: userMsg }
       ],
-      // JANGAN set temperature untuk hindari error "unsupported temperature"
-      response_format: { type: 'json_object' },
-      max_tokens: 500
+      // PENTING: jangan kirim max_tokens di model ini → error "unsupported_parameter"
+      // response_format JSON bisa tidak didukung pada sebagian model.
+      // Kalau model-mu error karena ini, hapus baris response_format di bawah.
+      response_format: { type: 'json_object' }
     });
-
-    content = resp?.choices?.[0]?.message?.content?.trim();
-    if (!content) throw new Error('Empty AI response');
+    raw = resp?.choices?.[0]?.message?.content?.trim();
+    if (!raw) throw new Error('Empty AI response');
   } catch (e) {
     console.error('[AI] Extract error:', e);
-    // fallback minimal
     return {
       intent: 'unknown',
       title: (text || '').trim(),
@@ -170,11 +138,11 @@ Balas sesuai aturan, hasilkan JSON persis seperti skema di atas.
       repeatDetails: {},
       cancelKeyword: null,
       stopNumber: null,
-      reply: 'Aku di sini buat bantu kamu bikin pengingat biar nggak lupa. Mau diingatkan tentang apa, dan kapan? 😊'
+      reply: 'Aku bisa bantu bikin pengingat biar nggak lupa. Mau diingatkan tentang apa, dan kapan? 😊'
     };
   }
 
-  const parsed = safeParseJSON(content);
+  const parsed = safeParseJSON(raw);
   if (!parsed || typeof parsed !== 'object') {
     return {
       intent: 'unknown',
@@ -186,12 +154,11 @@ Balas sesuai aturan, hasilkan JSON persis seperti skema di atas.
       repeatDetails: {},
       cancelKeyword: null,
       stopNumber: null,
-      reply: 'Boleh ceritakan mau diingatkan apa, dan jam berapa? Aku bantu aturkan ya 😊'
+      reply: 'Boleh jelaskan mau diingatkan apa, dan jam berapa? Aku bantu aturkan ya 😊'
     };
   }
 
-  // Normalisasi output
-  const out = {
+  return {
     intent: parsed.intent || 'unknown',
     title: parsed.title || null,
     recipientUsernames: Array.isArray(parsed.recipientUsernames) ? parsed.recipientUsernames : [],
@@ -203,8 +170,6 @@ Balas sesuai aturan, hasilkan JSON persis seperti skema di atas.
     stopNumber: parsed.stopNumber || null,
     reply: parsed.reply || null
   };
-
-  return out;
 }
 
 module.exports = { extract };
