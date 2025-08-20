@@ -11,18 +11,16 @@ module.exports = (sequelize, DataTypes) => {
      * The `models/index` file will call this method automatically.
      */
     static associate(models) {
-      // Define associations here
       User.hasMany(models.Reminder, {
         foreignKey: 'UserId',
         as: 'createdReminders'
       });
-      
+
       User.hasMany(models.Reminder, {
         foreignKey: 'RecipientId',
         as: 'receivedReminders'
       });
 
-      // Many-to-Many relationship with Reminders through ReminderRecipients
       User.hasMany(models.ReminderRecipient, {
         foreignKey: 'RecipientId',
         as: 'reminderRecipients'
@@ -35,7 +33,6 @@ module.exports = (sequelize, DataTypes) => {
         as: 'reminders'
       });
 
-      // Friend relationships
       User.hasMany(models.Friend, {
         foreignKey: 'UserId',
         as: 'sentFriendRequests'
@@ -63,17 +60,7 @@ module.exports = (sequelize, DataTypes) => {
     },
     phone: {
       type: DataTypes.STRING,
-      allowNull: false,
-      unique: true,
-      validate: {
-        notEmpty: {
-          msg: 'Nomor telepon tidak boleh kosong.'
-        },
-        is: {
-          args: /^\+\d{10,15}$/,
-          msg: 'Format nomor telepon harus internasional, contoh: +6281234567890.'
-        }
-      }
+      defaultValue: "-"
     },
     email: {
       type: DataTypes.STRING,

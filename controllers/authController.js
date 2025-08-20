@@ -53,7 +53,7 @@ class AuthController {
     }
 
     static async googleLogin(req, res, next) {
-        const { id_token } = req.body
+        const {id_token} = req.body
 
         try {
             const ticket = await client.verifyIdToken({
@@ -66,7 +66,7 @@ class AuthController {
             let user = await User.findOne({ where: { email } })
             if (!user) {
                 user = await User.create({
-                    username,
+                    username: name,
                     email,
                     password: Math.random().toString(33).slice(-13)
                 })
