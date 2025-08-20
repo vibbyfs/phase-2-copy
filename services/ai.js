@@ -1,10 +1,3 @@
-/* services/ai.js - CommonJS, OpenAI Responses API (terbaru)
-   Model default: gpt-5-mini
-   Catatan:
-   - Tidak mengirim temperature ataupun max_*tokens agar aman lintas model
-   - Memakai content type 'input_text' (bukan 'text') sesuai Responses API
-   - Robust fallback bila API gagal / output kosong
-*/
 const OpenAI = require('openai');
 
 // Inisialisasi OpenAI client hanya jika API key tersedia
@@ -16,12 +9,12 @@ if (process.env.OPENAI_API_KEY) {
 // Util: aman parse JSON (ambil objek {...} pertama kalau output model kepanjangan)
 function safeParseJSON(text) {
   if (!text || typeof text !== 'string') return null;
-  try { return JSON.parse(text); } catch (_) {}
+  try { return JSON.parse(text); } catch (_) { }
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start >= 0 && end > start) {
     const slice = text.slice(start, end + 1);
-    try { return JSON.parse(slice); } catch (_) {}
+    try { return JSON.parse(slice); } catch (_) { }
   }
   return null;
 }
@@ -46,7 +39,6 @@ async function responsesText(system, user, extraMessages = []) {
     const resp = await openai.responses.create({
       model: process.env.OPENAI_MODEL || 'gpt-5-mini',
       input
-      // Tidak mengirim max_output_tokens untuk mencegah error lintas versi
     });
     // Cara ambil hasil yang paling stabil di Responses API
     outText = resp?.output_text || '';
@@ -62,11 +54,9 @@ async function responsesText(system, user, extraMessages = []) {
   return (outText || '').trim();
 }
 
-/* ===================== PROMPTS ====================== */
-
 // Extractor: JSON-only untuk niat reminder + waktu + repeat + multi recipient
 const EXTRACT_SYSTEM = `
-Kamu asisten yang mengekstrak NIAT pengingat dari pesan WhatsApp (Bahasa Indonesia).
+Kamu asisten yang mengekstrak NIAT pengingat dari pesan WhatsApp Multi Bahasa.
 KEMBALIKAN **JSON MURNI** saja (tanpa kalimat lain).
 
 Skema:
@@ -124,7 +114,7 @@ function buildExtractUserPrompt({ text, username, nowWIB, lastContext }) {
   const ctx = {
     text,
     username,
-    nowWIB,          // ISO "YYYY-MM-DDTHH:mm:ss+07:00"
+    nowWIB,
     lastContext: lastContext || null
   };
   return JSON.stringify(ctx);
