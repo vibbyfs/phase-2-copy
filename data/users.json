@@ -58,5 +58,15 @@
     "timezone": "Asia/Jakarta",
     "createdAt": "2025-08-09T14:05:00Z",
     "updatedAt": "2025-08-09T14:05:00Z"
+  },
+  {
+    "id": 7,
+    "username": "haritzh",
+    "phone": "+6285694881267",
+    "email": "haritzh@mail.com",
+    "password": "password",
+    "timezone": "Asia/Jakarta",
+    "createdAt": "2025-08-09T14:05:00Z",
+    "updatedAt": "2025-08-09T14:05:00Z"
   }
 ]
