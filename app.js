@@ -1,4 +1,3 @@
-// app.js (CommonJS)
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
@@ -15,7 +14,6 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 app.use(cors());
 
-// Routes
 app.use('/api/auth', require('./routes/auth.routes'));
 app.use('/api/users', authentication, require('./routes/users.routes'));
 app.use('/api/reminders', authentication, require('./routes/reminders.routes'));
