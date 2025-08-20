@@ -1,119 +1,151 @@
-/* services/ai.js - CommonJS, Chat Completions only (no Responses API params)
-   Model: gpt-5-mini
-   Notes:
-   - No 'temperature' override (some deployments restrict it)
-   - No 'max_tokens' / 'max_completion_tokens' / 'max_output_tokens'
-   - Always return robust fallback when API fails
+/* services/ai.js - CommonJS, OpenAI Responses API (terbaru)
+   Model default: gpt-5-mini
+   Catatan:
+   - Tidak mengirim temperature ataupun max_*tokens agar aman lintas model
+   - Memakai content type 'input_text' (bukan 'text') sesuai Responses API
+   - Robust fallback bila API gagal / output kosong
 */
 const OpenAI = require('openai');
 
-// Initialize OpenAI client only if API key is available
+// Inisialisasi OpenAI client hanya jika API key tersedia
 let openai = null;
 if (process.env.OPENAI_API_KEY) {
   openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 }
 
-// Utility: safe JSON extractor (grabs first top-level object)
+// Util: aman parse JSON (ambil objek {...} pertama kalau output model kepanjangan)
 function safeParseJSON(text) {
   if (!text || typeof text !== 'string') return null;
-  // Try direct parse first
-  try { return JSON.parse(text); } catch(_) {}
-  // Fallback: extract first {...} block
+  try { return JSON.parse(text); } catch (_) {}
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start >= 0 && end > start) {
     const slice = text.slice(start, end + 1);
-    try { return JSON.parse(slice); } catch(_) {}
+    try { return JSON.parse(slice); } catch (_) {}
   }
   return null;
 }
 
-async function chatJSON(system, user, extraMessages = []) {
-  // Check if OpenAI client is available
-  if (!openai) {
-    throw new Error('OpenAI API key not configured');
-  }
-  
-  const messages = [
-    { role: 'system', content: system },
-    ...extraMessages,
-    { role: 'user', content: user }
+// Panggil Responses API dengan format input terbaru
+async function responsesText(system, user, extraMessages = []) {
+  if (!openai) throw new Error('OpenAI API key not configured');
+
+  // Bangun array input sesuai spesifikasi Responses API:
+  // setiap item: { role, content: [{ type: 'input_text', text }] }
+  const input = [
+    { role: 'system', content: [{ type: 'input_text', text: system }] },
+    ...extraMessages.map(m => ({
+      role: m.role,
+      content: [{ type: 'input_text', text: m.content }]
+    })),
+    { role: 'user', content: [{ type: 'input_text', text: user }] }
   ];
+
   let outText = '';
   try {
-    const resp = await openai.chat.completions.create({
+    const resp = await openai.responses.create({
       model: process.env.OPENAI_MODEL || 'gpt-5-mini',
-      messages,
-      // Do not set temperature or max_tokens to avoid model-specific errors
+      input
+      // Tidak mengirim max_output_tokens untuk mencegah error lintas versi
     });
-    outText = resp?.choices?.[0]?.message?.content || '';
+    // Cara ambil hasil yang paling stabil di Responses API
+    outText = resp?.output_text || '';
+    if (!outText && Array.isArray(resp?.output) && resp.output.length > 0) {
+      const first = resp.output[0];
+      const seg = first?.content?.[0];
+      outText = seg?.text || '';
+    }
   } catch (err) {
     console.error('[AI] API error:', err?.message || err);
     throw err;
   }
-  return outText;
+  return (outText || '').trim();
 }
 
-// Build Indonesian JSON-only extractor system prompt
+/* ===================== PROMPTS ====================== */
+
+// Extractor: JSON-only untuk niat reminder + waktu + repeat + multi recipient
 const EXTRACT_SYSTEM = `
-Kamu adalah asisten yang mengekstrak niat pengguna WhatsApp untuk pengingat dalam Bahasa Indonesia.
-Kembalikan **JSON murni saja** tanpa penjelasan lain.
+Kamu asisten yang mengekstrak NIAT pengingat dari pesan WhatsApp (Bahasa Indonesia).
+KEMBALIKAN **JSON MURNI** saja (tanpa kalimat lain).
 
 Skema:
 {
   "intent": "unknown" | "potential_reminder" | "need_time" | "need_content" | "create" | "cancel_keyword" | "stop_number" | "list",
-  "title": string | null,                         // isi pengingat (mis. "makan siang")
-  "recipientUsernames": string[],                 // extract @username mentions (tanpa @)
-  "timeType": "relative" | "absolute",            // jenis waktu bila ada
-  "dueAtWIB": string | null,                      // ISO 8601 Asia/Jakarta (contoh "2025-08-17T14:00:00+07:00")
+  "title": string | null,
+  "recipientUsernames": string[],
+  "timeType": "relative" | "absolute" | null,
+  "dueAtWIB": string | null,                      
   "repeat": "none" | "minutes" | "hours" | "daily" | "weekly" | "monthly" | "yearly",
   "repeatDetails": {
-    "interval": number | null,                    // untuk minutes/hours: interval number (30 menit = 30)
-    "timeOfDay": string | null,                   // "14:00", dsb untuk daily/weekly/monthly
-    "dayOfWeek": string | null,                   // "senin", dsb (bila weekly)
-    "dayOfMonth": number | null,                  // (bila monthly)
-    "monthDay": string | null,                    // "12 Mei" (bila yearly)
-    "endDate": string | null                      // "sampai 30 Sep" atau "selama 3 bulan"
+    "interval": number | null,                    
+    "timeOfDay": string | null,                   
+    "dayOfWeek": string | null,                   
+    "dayOfMonth": number | null,                  
+    "monthDay": string | null,                    
+    "endDate": string | null                      
   },
-  "cancelKeyword": string | null,                 // bila user kirim --reminder <keyword>
-  "stopNumber": number | null,                    // bila user kirim "stop (N)"
-  "reply": string                                 // satu kalimat balasan percakapan yang hangat & natural (bukan template), max 1 baris
+  "cancelKeyword": string | null,                 
+  "stopNumber": number | null,                    
+  "reply": string                                 
 }
 
-Aturan penting:
-- Deteksi niat pembuatan pengingat walau tanpa kata "ingatkan" (contoh: "jemput John nanti", "aku suka lupa minum air", "semoga gak lupa jemput John").
-- Extract @username mentions ke recipientUsernames (hapus @, ambil username saja).
-- Jika ada @username, tetap extract title dari sisa pesan setelah hapus mentions.
-- Jika pesan hanya waktu (contoh "2 menit lagi") tanpa isi, intent = "need_content".
-- Jika pesan hanya isi (contoh "minum obat") tanpa waktu, intent = "need_time".
-- Jika keduanya ada, intent = "create".
-- Jika mulai dengan "--reminder <keyword>", intent = "cancel_keyword", cancelKeyword=keyword.
-- Jika format "stop (N)" atau "batal (N)" atau hanya angka setelah list reminder, intent = "stop_number", stopNumber=N.
-- Jika "list" => intent = "list".
-- Repeat patterns:
-  - "setiap X menit/jam" → repeat="minutes"/"hours", interval=X
-  - "setiap hari jam X" → repeat="daily", timeOfDay="X"
-  - "setiap senin/selasa jam X" → repeat="weekly", dayOfWeek="senin", timeOfDay="X"
-  - "setiap tanggal X jam Y" → repeat="monthly", dayOfMonth=X, timeOfDay="Y"
-  - "setiap 12 Mei jam X" → repeat="yearly", monthDay="12 Mei", timeOfDay="X"
-  - "sampai 30 Sep" atau "selama 3 bulan" → endDate extract
-- Waktu:
-  - Pahami: "1/2/5/15 menit lagi", "jam 20.00", "20:30", "besok jam 2 siang", "rabu depan jam 3", "lusa", "pagi/siang/sore/malam".
-  - Konversi ke WIB ISO di dueAtWIB (gunakan nowWIB). Jika hanya hari (mis. "besok") tanpa jam, minta jam -> intent "need_time".
-- reply: hangat, personal, dan relevan dengan pesan terbaru & konteks; 1 kalimat, tidak kaku, tanpa daftar panjang.
+ATAURAN:
+- Deteksi niat reminder walau tanpa kata "ingatkan" (contoh: "jemput John nanti", "aku suka lupa minum air", "semoga gak lupa jemput John").
+- Ekstrak @username ke recipientUsernames (hapus '@'). Jika ada @username, title diambil dari sisa kalimat (tanpa mentions).
+- Jika hanya waktu (mis. "2 menit lagi") tanpa isi → intent = "need_content".
+- Jika hanya isi tanpa waktu → intent = "need_time".
+- Jika ada keduanya → intent = "create".
+- "--reminder <keyword>" → intent = "cancel_keyword", set cancelKeyword.
+- "stop (N)" / "batal (N)" / angka yang dipilih setelah list → intent = "stop_number", set stopNumber.
+- "list" → intent = "list".
+
+REPEAT SEDERHANA:
+- "setiap X menit/jam" → repeat="minutes"/"hours", interval=X
+- "setiap hari jam X" → repeat="daily", timeOfDay="X"
+- "setiap senin/selasa ... jam X" → repeat="weekly", dayOfWeek="senin", timeOfDay="X"
+- "setiap tanggal X jam Y" → repeat="monthly", dayOfMonth=X, timeOfDay="Y"
+- "setiap 12 Mei jam X" → repeat="yearly", monthDay="12 Mei", timeOfDay="X"
+- "sampai 30 Sep" / "selama 3 bulan" → taruh di endDate (string apa adanya)
+
+WAKTU (WIB):
+- Pahami: "1/2/5/15 menit lagi", "jam 20.00", "20:30", "besok jam 2 siang", "rabu depan jam 3", "lusa", "pagi/siang/sore/malam".
+- "dueAtWIB" harus ISO Asia/Jakarta (contoh "2025-08-17T14:00:00+07:00").
+- Jika user bilang "setiap tanggal 1 jam 3 sore", itu BERULANG bulanan (repeat="monthly", dayOfMonth=1, timeOfDay="15:00"). Jangan dijadwalkan hari ini jam 3.
+- Jangan mengatur ke masa lalu. Jika waktu absolut yang disebut sudah lewat hari ini, pilih waktu terdekat yang masuk akal (besok/pekan depan/dst).
+- Jika hanya hari (mis. "besok") tanpa jam → intent "need_time" (minta jam).
+
+"reply":
+- SATU kalimat, hangat, natural, tidak kaku. Boleh emoji secukupnya.
+- Menjawab konteks pesan terakhir; bila potensi reminder, tawarkan bantu atur waktu dengan lembut.
 `;
 
 function buildExtractUserPrompt({ text, username, nowWIB, lastContext }) {
   const ctx = {
     text,
     username,
-    nowWIB,          // ISO Asia/Jakarta "YYYY-MM-DDTHH:mm:ss+07:00"
-    lastContext      // { pendingTitle, pendingTimeHint, lastListedIds }
+    nowWIB,          // ISO "YYYY-MM-DDTHH:mm:ss+07:00"
+    lastContext: lastContext || null
   };
   return JSON.stringify(ctx);
 }
 
+// Generator: buat kalimat obrolan (1 baris) atau pesan pengingat / motivasi yang personal
+const REPLY_SYSTEM = `
+Kamu asisten WhatsApp berbahasa Indonesia: hangat, santai, dan personal.
+
+Jika context.kind = "reminder_delivery" atau "motivational_reminder":
+- Buat pesan pengingat yang personal dan memotivasi.
+- Format ringkas: "Halo [nama], waktunya [aktivitas]! [motivasi singkat] [emoji]"
+- Sesuaikan emoji: ☕ (kopi), 💪 (olahraga), 📚 (belajar), 💊 (obat), 🚗 (jemput), ✨ (semangat), 🙏 (doa), dll.
+- Satu kalimat saja.
+
+Selain itu:
+- Jawab dalam SATU kalimat yang alami (maks satu baris), tidak kaku, boleh emoji secukupnya.
+`;
+
 async function extract({ text, userProfile = {}, sessionContext = {} }) {
+  // Waktu sekarang dalam WIB (tanpa bergantung pada server TZ)
   const now = new Date();
   const offsetMs = 7 * 60 * 60 * 1000;
   const nowWIB = new Date(now.getTime() + offsetMs).toISOString().replace('Z', '+07:00');
@@ -128,25 +160,25 @@ async function extract({ text, userProfile = {}, sessionContext = {} }) {
 
   let out;
   try {
-    const raw = await chatJSON(system, user);
+    const raw = await responsesText(system, user);
     out = safeParseJSON(raw);
-  } catch (err) {
-    // API failure -> handled below
+  } catch (_) {
+    // Dibiarkan; fallback di bawah
   }
 
-  // Default object if parsing fails
+  // Fallback default jika parsing gagal / output kosong
   if (!out || typeof out !== 'object') {
     return {
       intent: 'unknown',
-      title: text?.trim() || null,
+      title: (text || '').trim() || null,
       recipientUsernames: [],
       timeType: 'absolute',
       dueAtWIB: null,
       repeat: 'none',
-      repeatDetails: { 
+      repeatDetails: {
         interval: null,
-        timeOfDay: null, 
-        dayOfWeek: null, 
+        timeOfDay: null,
+        dayOfWeek: null,
         dayOfMonth: null,
         monthDay: null,
         endDate: null
@@ -157,10 +189,19 @@ async function extract({ text, userProfile = {}, sessionContext = {} }) {
     };
   }
 
-  // Normalize minimal fields
-  out.recipientUsernames = Array.isArray(out.recipientUsernames) ? out.recipientUsernames : [];
+  // Normalisasi ringan agar aman untuk controller/scheduler
+  if (!Array.isArray(out.recipientUsernames)) out.recipientUsernames = [];
   out.repeat = out.repeat || 'none';
-  if (!out.repeatDetails) out.repeatDetails = { timeOfDay: null, dayOfWeek: null, dayOfMonth: null };
+  if (!out.repeatDetails) {
+    out.repeatDetails = {
+      interval: null,
+      timeOfDay: null,
+      dayOfWeek: null,
+      dayOfMonth: null,
+      monthDay: null,
+      endDate: null
+    };
+  }
   if (typeof out.reply !== 'string' || !out.reply.trim()) {
     out.reply = 'Siap. Ada yang mau kamu ingatkan?';
   }
@@ -168,46 +209,15 @@ async function extract({ text, userProfile = {}, sessionContext = {} }) {
   return out;
 }
 
-// Enhanced message generator for various contexts including motivational reminder delivery
-const REPLY_SYSTEM = `
-Kamu adalah asisten WhatsApp berbahasa Indonesia yang hangat, santai, dan natural.
-
-Untuk context.kind = "motivational_reminder":
-- Buat pesan pengingat LENGKAP yang SANGAT personal dan motivasional
-- Mulai dengan greeting dan aktivitas, lalu tambahkan motivasi
-- Sesuaikan emoticon dengan aktivitas (☕ untuk kopi, 💪 untuk olahraga, 📚 untuk belajar, dll)
-- Gunakan nama user jika ada dalam context
-- Format: "[greeting], waktunya [aktivitas]! [motivasi singkat] [emoticon]"
-- Jangan ulangi informasi yang sudah ada di template
-
-Untuk context.kind = "reminder_delivery":
-- Buat pesan pengingat yang SANGAT personal dan motivasional
-- Sesuaikan emoticon dengan aktivitas (☕ untuk kopi, 💪 untuk olahraga, 📚 untuk belajar, dll)
-- Tambahkan kalimat motivasi singkat yang relevan dengan aktivitas
-- Gunakan nama user jika ada
-- Format: "Halo [nama], waktunya [aktivitas]! [motivasi singkat] [emoticon]"
-
-Untuk context lainnya:
-- Hasilkan **SATU kalimat** saja (maksimal satu baris), ramah & relevan dengan konteks
-- Hindari bahasa kaku, boleh pakai emoji secukupnya
-
-Contoh motivational_reminder:
-- title: "belajar" → "Halo Andien, waktunya belajar — fokus sedikit sekarang, kamu pasti bisa! 📚"
-- title: "minum kopi" → "Halo Budi, waktunya minum kopi! Nikmati aromanya yang bikin semangat ☕😊"
-- title: "olahraga" → "Halo Sarah, waktunya olahraga! Tubuh sehat, pikiran fresh 💪✨"
-- title: "minum obat" → "Halo Rina, waktunya minum obat! Jaga kesehatan ya 💊❤️"
-- title: "jemput anak" → "Halo Papa, waktunya jemput anak! Safe trip 🚗👶"
-`;
-
 async function generateReply(context) {
   const user = JSON.stringify(context || {});
   try {
-    const text = await chatJSON(REPLY_SYSTEM, user);
-    // ensure it is a single line
+    const text = await responsesText(REPLY_SYSTEM, user);
     return (text || '').replace(/\s+/g, ' ').trim();
   } catch (err) {
     console.error('[AI] generateReply error:', err?.message || err);
-    return null;
+    // Fallback kalimat tunggal supaya percakapan tetap hidup
+    return 'Siap! Aku bantu atur semuanya, kabari aja detailnya ya 😊';
   }
 }
 
