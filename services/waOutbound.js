@@ -1,4 +1,3 @@
-// services/waOutbound.js (CommonJS)
 // Twilio WhatsApp sender
 
 const twilio = require('twilio');

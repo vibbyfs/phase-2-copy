@@ -1,4 +1,3 @@
-// services/session.js (CommonJS)
 // In-memory lightweight session per phone (WhatsApp number)
 
 const store = new Map();

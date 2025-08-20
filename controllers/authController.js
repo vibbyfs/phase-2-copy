@@ -53,7 +53,7 @@ class AuthController {
     }
 
     static async googleLogin(req, res, next) {
-        const {id_token} = req.body
+        const { id_token } = req.body
 
         try {
             const ticket = await client.verifyIdToken({

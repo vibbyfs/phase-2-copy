@@ -1,4 +1,3 @@
-// controllers/waController.js - CommonJS, Twilio outbound, conversational flow (revamped)
 const { User, Reminder, ReminderRecipient } = require('../models');
 const { scheduleReminder, cancelReminder } = require('../services/scheduler');
 const sessionStore = require('../services/session');
@@ -20,8 +19,8 @@ dayjs.extend(tz);
 function parseISOToUTC(isoString) {
   if (!isoString) return null;
   try {
-    const dt = dayjs(isoString);            // ISO sudah mengandung offset (+07:00)
-    return dt.utc().toDate();               // konversi ke Date UTC untuk simpan DB & scheduling
+    const dt = dayjs(isoString);
+    return dt.utc().toDate();
   } catch (err) {
     console.error('[parseISOToUTC] Invalid date:', isoString, err?.message || err);
     return null;
@@ -42,7 +41,7 @@ function humanWhen(isoString) {
       if (mins === 0) return `${hours} jam lagi`;
       return `${hours} jam ${mins} menit lagi`;
     }
-    return dt.format('DD MMM, HH.mm'); // tampilan tanggal untuk >1 hari
+    return dt.format('DD MMM, HH.mm');
   } catch {
     return null;
   }

@@ -1,4 +1,3 @@
-// services/scheduler.js
 const schedule = require('node-schedule');
 const { Op } = require('sequelize');
 const { User, Reminder, ReminderRecipient } = require('../models');
